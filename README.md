@@ -38,7 +38,8 @@ pose_detection/
 │   ├── run_tangqiao.py
 │   ├── run_pudongdadao.py
 │   ├── run_linping.py
-│   └── run_longhuazhong.py
+│   ├── run_longhuazhong.py
+│   └── video_anonymize.py   # 视频脱敏工具
 ├── data/                   # 标注数据 (JSON + 背景图)
 ├── models/                 # 模型文件
 ├── output/
@@ -195,6 +196,42 @@ pose_detection/
 - MAD 持续高于 20（20帧）→ 判定"列车到站"，记录到站时间
 - MAD 持续低于 15（20帧）→ 判定"列车离站"，记录离站时间
 - 视频结束时输出：`列车到站: X.Xs` / `列车离站: Y.Ys` / `停靠时段: X.Xs ~ Y.Ys`
+
+## 视频脱敏工具
+
+独立脚本 `scripts/video_anonymize.py`，基于 YOLO pose 模型自动检测人脸并打马赛克，同时支持手动框选固定区域打码。
+
+**两种使用方式：**
+
+方式一：直接修改脚本顶部 `VIDEO_PATH` / `OUTPUT_PATH`，然后运行：
+```bash
+python scripts/video_anonymize.py
+```
+
+方式二：命令行传参（会覆盖配置中的值）：
+```bash
+python scripts/video_anonymize.py -i video.mp4 -o output.mp4 --device cuda:0
+```
+
+**主要功能：**
+- 人脸自动检测 + 马赛克（基于 pose 关键点：鼻/眼/耳 + 双肩兜底）
+- IoU 多目标跟踪 + 指数平滑，减少人脸框闪烁
+- 鼠标框选固定区域打码
+- 预览模式（`--preview`）：先看检测效果，不输出文件
+- 帧范围选择（`--start-frame` / `--end-frame`）
+- 自动合并原音频（`--merge-audio`）
+
+**关键参数（可通过命令行调整）：**
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--mosaic-blocks` | 12 | 马赛克粒度，越小格子越大 |
+| `--face-expand` | 2.4 | 人脸框放大倍数 |
+| `--kp-conf` | 0.25 | 关键点置信度阈值 |
+| `--track-smooth` | 0.6 | 平滑系数（0=不平滑，1=完全不动） |
+| `--track-max-lost` | 30 | 跟踪丢失后保留帧数 |
+| `--no-face` | — | 跳过人脸检测，只做手动框选 |
+| `--no-fix-roi` | — | 跳过手动框选，只做人脸检测 |
 
 ## 快速开始
 

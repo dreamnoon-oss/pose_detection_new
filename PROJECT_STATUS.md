@@ -1,6 +1,6 @@
 # Project Status — 端头门司机行为分析
 
-**Updated:** 2026-07-23
+**Updated:** 2026-07-27
 
 ## Architecture
 
@@ -85,6 +85,9 @@ All rules run independently per frame → timestamped events → mapped to actio
 | dynamic_angle_coeff | 0.6 | elbow bend compensation for 2D foreshortening |
 
 ## Recent Changes
+
+- **2026-07-27**:
+  - **视频脱敏工具** (`scripts/video_anonymize.py`): 独立的人脸自动马赛克脚本。基于 YOLO pose 关键点定位人脸（鼻/眼/耳 + 双肩兜底），IoU 多目标跟踪 + 指数平滑减少闪烁。支持手动框选固定区域打码、预览模式、帧范围选择、GPU 加速、自动合并音频。两种使用方式：直接改脚本顶部配置或命令行传参。
 
 - **2026-07-23**:
   - **静安寺、龙华中新增道岔检测（Act5 CheckSwitch）**: 复用 `line_1` + `anti_parallel`，与浦东大道逻辑一致。两站动作数从 4→5。
