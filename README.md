@@ -39,6 +39,7 @@ pose_detection/
 │   ├── run_pudongdadao.py
 │   ├── run_linping.py
 │   ├── run_longhuazhong.py
+│   ├── run_tangqiao_fast.py # 塘桥空闲快进测试版（跳过空轨道段推理）
 │   └── video_anonymize.py   # 视频脱敏工具
 ├── data/                   # 标注数据 (JSON + 背景图)
 ├── models/                 # 模型文件
@@ -160,6 +161,8 @@ pose_detection/
 
 视频播放结束后自动生成 CSV 报告到 `output/report/`，Excel 直接打开。
 
+**输出命名规则**：输出视频和报告文件名自动跟随输入视频名——输入 `塘桥4.mp4` 则输出 `video/pose_output_塘桥4.mp4` 和 `report/report_塘桥4.csv`，不同视频不会互相覆盖。输出根目录由各站点脚本顶部的 `OUT_DIR` 配置。
+
 报告内容：
 - 基本信息（站点、脚本、日期、视频路径）
 - 模型参数（模型、分辨率、关键点、置信度阈值）
@@ -197,9 +200,16 @@ pose_detection/
 - MAD 持续低于 15（20帧）→ 判定"列车离站"，记录离站时间
 - 视频结束时输出：`列车到站: X.Xs` / `列车离站: Y.Ys` / `停靠时段: X.Xs ~ Y.Ys`
 
+## 空闲快进模式（测试中）
+
+`VideoPlayer` 新增两个可选参数（目前仅 `run_tangqiao_fast.py` 启用，验证后推广）：
+
+- **`idle_fast_forward=True`**：列车不在场（AWAY）时跳过 YOLO 推理和渲染，每帧只做轻量 MAD 帧差检测（~1ms vs ~60ms），空轨道段接近秒过。列车到站自动恢复逐帧检测，不跳帧、不影响到站确认逻辑。快进时画面底部显示黄色 `>>> FAST-FORWARD >>>`，窗口每 10 帧刷新一次。结束时打印统计：`快进 X 帧 / 检测 Y 帧 / 总耗时`
+- **`auto_exit=True`**：视频播放到末尾后自动完成分析、生成报告并退出，无需手动按 Q，适合挂机批量跑
+
 ## 视频脱敏工具
 
-独立脚本 `scripts/video_anonymize.py`，基于 YOLO pose 模型自动检测人脸并打马赛克，同时支持手动框选固定区域打码。
+独立脚本 `scripts/video_anonymize.py`，基于 YOLO pose 模型自动检测人脸并打码（支持**马赛克 / 高斯模糊**两种方式），同时支持手动框选固定区域打码。
 
 **两种使用方式：**
 
@@ -214,19 +224,23 @@ python scripts/video_anonymize.py -i video.mp4 -o output.mp4 --device cuda:0
 ```
 
 **主要功能：**
-- 人脸自动检测 + 马赛克（基于 pose 关键点：鼻/眼/耳 + 双肩兜底）
+- 人脸自动检测 + 打码（基于 pose 关键点：鼻/眼/耳 + 双肩兜底）
+- 两种打码方式：马赛克 / 高斯模糊（脚本顶部 `MASK_MODE` 或 `--mode` 切换；高斯模糊观感自然，推荐后续仍需跑动作检测的视频使用）
 - IoU 多目标跟踪 + 指数平滑，减少人脸框闪烁
 - 鼠标框选固定区域打码
 - 预览模式（`--preview`）：先看检测效果，不输出文件
 - 帧范围选择（`--start-frame` / `--end-frame`）
 - 自动合并原音频（`--merge-audio`）
 
-**关键参数（可通过命令行调整）：**
+**关键参数（脚本顶部配置区可直接改，命令行传参会覆盖）：**
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `--mosaic-blocks` | 12 | 马赛克粒度，越小格子越大 |
-| `--face-expand` | 2.4 | 人脸框放大倍数 |
+| `MASK_MODE` / `--mode` | blur | 打码方式：mosaic=马赛克, blur=高斯模糊 |
+| `BLUR_STRENGTH` / `--blur-strength` | 0.5 | 模糊强度，核大小 = 区域短边 × 该值 |
+| `MOSAIC_BLOCKS` / `--mosaic-blocks` | 12 | 马赛克粒度，越小格子越大 |
+| `FACE_EXPAND` / `--face-expand` | 2.4 | 人脸框放大倍数（注意：框大小取"面部点跨度×倍数 / 人体框高×0.22 / 最小边长"三者最大值） |
+| `MIN_FACE_SIZE` / `--min-face-size` | 24 | 人脸框最小边长像素 |
 | `--kp-conf` | 0.25 | 关键点置信度阈值 |
 | `--track-smooth` | 0.6 | 平滑系数（0=不平滑，1=完全不动） |
 | `--track-max-lost` | 30 | 跟踪丢失后保留帧数 |

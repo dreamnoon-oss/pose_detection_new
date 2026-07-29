@@ -18,6 +18,9 @@ VIDEO_PATH = r"D:\科研\申通技术中心\端头门司机行为分析\上体�
 MODEL_PATH = str(Path(MODEL_DIR) / "yolo26x-pose.pt")
 ANNOTATIONS_FILE = str(Path(DATA_DIR) / "regions_shangtichang.json")
 
+# 输出配置：视频存到 OUT_DIR/video/，报告存到 OUT_DIR/report/，文件名自动跟随输入视频名
+OUT_DIR = str(Path(OUTPUT_DIR))    # 输出根目录，可改成任意路径
+
 # ---------------------------------------------------------------------------
 # Detection rules (unique conditions; each runs independently)
 # ---------------------------------------------------------------------------
@@ -60,8 +63,7 @@ if __name__ == "__main__":
     player = VideoPlayer(
         model, VIDEO_PATH, detector, ACTION_MAPPING,
         annotations_file=ANNOTATIONS_FILE,
-        output_dir=str(Path(OUTPUT_DIR)),
-        output_name="pose_output_shangtichang.mp4",
+        output_dir=OUT_DIR,
         station_name="上体场", model_path=MODEL_PATH,
         imgsz=640, frame_skip=0,
         conf_low_threshold=0.3, conf_mid_threshold=0.6,

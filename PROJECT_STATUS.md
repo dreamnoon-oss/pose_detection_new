@@ -1,6 +1,6 @@
 # Project Status — 端头门司机行为分析
 
-**Updated:** 2026-07-27
+**Updated:** 2026-07-29
 
 ## Architecture
 
@@ -85,6 +85,12 @@ All rules run independently per frame → timestamped events → mapped to actio
 | dynamic_angle_coeff | 0.6 | elbow bend compensation for 2D foreshortening |
 
 ## Recent Changes
+
+- **2026-07-29**:
+  - **空闲快进模式** (`src/player.py` `idle_fast_forward`): 列车 AWAY 时跳过 YOLO 推理和渲染，每帧只做 MAD 帧差检测（~1ms/帧），到站自动恢复逐帧检测。结束打印快进/检测帧数统计。目前仅 `scripts/run_tangqiao_fast.py` 启用，验证后推广。
+  - **自动退出** (`auto_exit`): 视频播完自动生成报告并退出，无需手动按 Q。
+  - **输出命名跟随输入视频**: 输出视频 `pose_output_<视频名>.mp4`、报告 `report_<视频名>.csv` 由输入视频名自动生成，不同视频不再互相覆盖。所有站点脚本删除写死的 `output_name`，顶部新增 `OUT_DIR` 配置输出根目录。
+  - **脱敏工具高斯模糊模式** (`scripts/video_anonymize.py`): 新增 `MASK_MODE`/`--mode`（mosaic/blur）与 `--blur-strength`（核=区域短边×系数，自适应人脸大小），默认改为 blur；`FACE_EXPAND`/`MIN_FACE_SIZE`/`MOSAIC_BLOCKS` 提升为脚本顶部配置。
 
 - **2026-07-27**:
   - **视频脱敏工具** (`scripts/video_anonymize.py`): 独立的人脸自动马赛克脚本。基于 YOLO pose 关键点定位人脸（鼻/眼/耳 + 双肩兜底），IoU 多目标跟踪 + 指数平滑减少闪烁。支持手动框选固定区域打码、预览模式、帧范围选择、GPU 加速、自动合并音频。两种使用方式：直接改脚本顶部配置或命令行传参。

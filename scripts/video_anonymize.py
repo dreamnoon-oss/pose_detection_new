@@ -32,8 +32,13 @@ from ultralytics import YOLO
 # ---------------------------------------------------------------------------
 # 配置（可直接修改此处，也支持命令行 -i/-o 覆盖）
 # ---------------------------------------------------------------------------
-VIDEO_PATH = r"\\10.151.2.205\共享文件2\司机行为规范样本采样\短视频\宝山4.mp4"
-OUTPUT_PATH = r"D:\pycharm_pytorch\ultralytics-8.4.75\pose_detection\output\processed"          # 留空 = 自动在输入同目录生成 _masked.mp4
+VIDEO_PATH = r"\\10.151.2.205\共享文件2\司机行为规范样本采样\[114](4)塘桥下行端头门1-2026-04-02 10-00-00--2026-04-02 11-00-00.mp4"
+OUTPUT_PATH = r"\\10.151.2.205\共享文件2\processed"          # 留空 = 自动在输入同目录生成 _masked.mp4
+MASK_MODE = "blur"         # "mosaic" = 马赛克, "blur" = 高斯模糊（命令行 --mode 可覆盖）
+FACE_EXPAND = 0.8          # 人脸框放大倍数，越大遮得越多
+MIN_FACE_SIZE = 20         # 人脸框最小边长（像素）
+BLUR_STRENGTH = 1        # 高斯模糊强度：核大小 = 区域短边 × 该值
+MOSAIC_BLOCKS = 5         # 马赛克粒度，越小格子越大
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_MODEL = os.path.join(os.path.dirname(_SCRIPT_DIR), "models", "yolo26x-pose.pt")
@@ -59,6 +64,31 @@ def mosaic_region(frame, x1, y1, x2, y2, blocks=12):
                        interpolation=cv2.INTER_LINEAR)
     frame[y1:y2, x1:x2] = cv2.resize(small, (rw, rh),
                                      interpolation=cv2.INTER_NEAREST)
+
+
+def blur_region(frame, x1, y1, x2, y2, strength=0.5):
+    """对 frame 的 [y1:y2, x1:x2] 区域高斯模糊（原地修改）。
+
+    strength: 模糊核大小 = 区域短边 × strength，越大越糊。
+    """
+    h, w = frame.shape[:2]
+    x1, y1 = max(0, int(x1)), max(0, int(y1))
+    x2, y2 = min(w, int(x2)), min(h, int(y2))
+    if x2 - x1 < 4 or y2 - y1 < 4:
+        return
+    roi = frame[y1:y2, x1:x2]
+    k = int(min(roi.shape[0], roi.shape[1]) * strength)
+    k = max(k, 9)
+    if k % 2 == 0:
+        k += 1
+    frame[y1:y2, x1:x2] = cv2.GaussianBlur(roi, (k, k), 0)
+
+
+def mask_region(frame, x1, y1, x2, y2, mode="mosaic", blocks=12, blur_strength=0.5):
+    if mode == "blur":
+        blur_region(frame, x1, y1, x2, y2, strength=blur_strength)
+    else:
+        mosaic_region(frame, x1, y1, x2, y2, blocks=blocks)
 
 
 # ---------------------------------------------------------------------------
@@ -284,12 +314,16 @@ def main():
                         help="推理分辨率 (默认 640)")
     parser.add_argument("--kp-conf", type=float, default=0.25,
                         help="人脸关键点置信度阈值 (默认 0.25)")
-    parser.add_argument("--face-expand", type=float, default=2.4,
-                        help="人脸框放大倍数 (默认 2.4)")
-    parser.add_argument("--min-face-size", type=int, default=24,
-                        help="人脸框最小边长像素 (默认 24)")
-    parser.add_argument("--mosaic-blocks", type=int, default=12,
-                        help="马赛克粒度，越小格子越大 (默认 12)")
+    parser.add_argument("--face-expand", type=float, default=FACE_EXPAND,
+                        help=f"人脸框放大倍数 (默认 {FACE_EXPAND})")
+    parser.add_argument("--min-face-size", type=int, default=MIN_FACE_SIZE,
+                        help=f"人脸框最小边长像素 (默认 {MIN_FACE_SIZE})")
+    parser.add_argument("--mosaic-blocks", type=int, default=MOSAIC_BLOCKS,
+                        help=f"马赛克粒度，越小格子越大 (默认 {MOSAIC_BLOCKS})")
+    parser.add_argument("--mode", choices=["mosaic", "blur"], default=None,
+                        help="打码方式：mosaic=马赛克, blur=高斯模糊（不填用上方 MASK_MODE）")
+    parser.add_argument("--blur-strength", type=float, default=BLUR_STRENGTH,
+                        help=f"高斯模糊强度，核大小=区域短边×该值 (默认 {BLUR_STRENGTH})")
     parser.add_argument("--track-max-lost", type=int, default=30,
                         help="跟踪丢失后保留的最大帧数 (默认 30)")
     parser.add_argument("--track-iou", type=float, default=0.3,
@@ -377,7 +411,8 @@ def main():
     print(f"\n输入: {video_path}")
     print(f"分辨率: {w}x{h}  FPS: {fps:.1f}  帧范围: {start_f}-{end_f} (共 {total})")
     print(f"人脸检测: {'关闭' if args.no_face else '开启'}  "
-          f"固定区域: {len(fixed_regions)} 个")
+          f"固定区域: {len(fixed_regions)} 个  "
+          f"打码方式: {'高斯模糊' if (args.mode or MASK_MODE) == 'blur' else '马赛克'}")
     print(f"预览模式: {'是' if args.preview else '否'}\n")
 
     while True:
@@ -399,10 +434,13 @@ def main():
             face_boxes = tracker.update(detections)
 
         # 打码
+        mode = args.mode or MASK_MODE
         for box in face_boxes:
-            mosaic_region(frame, *box, blocks=args.mosaic_blocks)
+            mask_region(frame, *box, mode=mode,
+                        blocks=args.mosaic_blocks, blur_strength=args.blur_strength)
         for reg in fixed_regions:
-            mosaic_region(frame, *reg, blocks=args.mosaic_blocks)
+            mask_region(frame, *reg, mode=mode,
+                        blocks=args.mosaic_blocks, blur_strength=args.blur_strength)
 
         if args.preview:
             for box in face_boxes:

@@ -38,7 +38,9 @@ class VideoPlayer:
                  conf_low_threshold=CONF_LOW_THRESHOLD,
                  conf_mid_threshold=CONF_MID_THRESHOLD,
                  train_mad_threshold=20,
-                 show_arm_bend=False):
+                 show_arm_bend=False,
+                 idle_fast_forward=False,
+                 auto_exit=False):
         self.model = model
         self.video_path = video_path
         self.detector = detector
@@ -54,6 +56,11 @@ class VideoPlayer:
         self.half = half              # FP16 inference
         self.train_mad_threshold = train_mad_threshold
         self.show_arm_bend = show_arm_bend
+        self.idle_fast_forward = idle_fast_forward
+        self.auto_exit = auto_exit
+        self._idle_frames = 0
+        self._detect_frames = 0
+        self._run_t0 = None
 
         self.conf_mapper = ConfidenceColorMapper(
             low_threshold=conf_low_threshold,
@@ -159,6 +166,9 @@ class VideoPlayer:
         video_dir = os.path.join(self.output_dir, "video")
         os.makedirs(video_dir, exist_ok=True)
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        # Output video named after the input video file
+        video_base = os.path.splitext(os.path.basename(self.video_path))[0]
+        self.output_name = f"pose_output_{video_base}.mp4"
         out_path = os.path.join(video_dir, self.output_name)
         self.out = cv2.VideoWriter(out_path, fourcc, self.fps,
                                    (self.width, self.height))
@@ -176,6 +186,13 @@ class VideoPlayer:
             end_time = (self.cap.get(cv2.CAP_PROP_POS_FRAMES) / self.fps
                         if self.fps else 0)
             print("\n" + self.train_detector.summary(end_time))
+        if self.idle_fast_forward and self._run_t0 is not None:
+            elapsed = time.time() - self._run_t0
+            total = self._idle_frames + self._detect_frames
+            dur = f", 视频时长 {total / self.fps:.1f}s" if self.fps else ""
+            print(f"\n空闲快进统计: 快进 {self._idle_frames} 帧 / "
+                  f"检测 {self._detect_frames} 帧 / 共 {total} 帧, "
+                  f"总耗时 {elapsed:.1f}s{dur}")
         if self.cap is not None:
             self.cap.release()
         if self.out is not None:
@@ -191,17 +208,30 @@ class VideoPlayer:
         """Read one frame, run detection + state machine + rendering. Returns key code."""
         ret, frame = self.cap.read()
         if not ret:
-            self._paused = True
-            print("播放结束，已自动暂停")
             if self._last_frame is not None:
                 viz.draw_pause_indicator(self._last_frame)
                 cv2.putText(self._last_frame, "END", (10, 90),
                             cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
                 self._last_frame = self._run_analysis(self._last_frame)
                 cv2.imshow(self.window_name, self._last_frame)
+            if self.auto_exit:
+                # Do NOT pause: the run loop's pause branch would swallow the
+                # quit key returned here.
+                print("播放结束，auto_exit 已启用，自动退出")
+                return ord('q')
+            self._paused = True
+            print("播放结束，已自动暂停")
             return None
 
         t0 = time.time()
+        if self._run_t0 is None:
+            self._run_t0 = t0
+
+        # Idle fast-forward: no train in station -> skip YOLO + rendering
+        if (self.idle_fast_forward and self.train_detector is not None
+                and self.train_detector.state == 'AWAY'):
+            return self._process_idle_frame(frame)
+        self._detect_frames += 1
 
         # Pose detection
         cur_frame = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES))
@@ -279,6 +309,38 @@ class VideoPlayer:
 
         wait_ms = max(1, self.delay - int(infer_ms))
         return cv2.waitKey(wait_ms) & 0xFF
+
+    def _process_idle_frame(self, frame):
+        """Fast path while the track is empty: MAD check only, no YOLO/render."""
+        self._idle_frames += 1
+
+        prev_state = self.train_detector.state
+        train_state, train_mad = self.train_detector.update(frame)
+        self._last_train_state = train_state
+        self._last_train_mad = train_mad
+        if prev_state != 'PRESENT' and train_state == 'PRESENT':
+            self.detector.enable()
+
+        self._last_raw_frame = frame.copy()
+        td = self.train_detector
+        viz.draw_train_status(frame, train_state, train_mad,
+                              hold_counter=td.hold_counter,
+                              hold_target=td.hold_target)
+        self._last_frame = frame
+        self.out.write(frame)
+
+        cur = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES))
+        if cur % 10 == 0 and self._window_exists():
+            self._setting_trackbar = True
+            cv2.setTrackbarPos("Progress", self.window_name, cur)
+            self._setting_trackbar = False
+            viz.draw_frame_info(frame, cur, self.total_frames, self.fps)
+            cv2.putText(frame, ">>> FAST-FORWARD (track empty) >>>",
+                        (10, self.height - 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+            cv2.imshow(self.window_name, frame)
+            return cv2.waitKey(1) & 0xFF
+        return None
 
     # ------------------------------------------------------------------
     # Internal: controls
@@ -495,11 +557,12 @@ class VideoPlayer:
             end_time = self.total_frames / self.fps if self.fps else 0
             print("\n" + self.train_detector.summary(end_time))
 
-        # Generate Excel report
+        # Generate CSV report (named after the input video file)
         script_name = os.path.basename(sys.argv[0])
         report_dir = os.path.join(self.output_dir, "report")
         os.makedirs(report_dir, exist_ok=True)
-        report_name = self.output_name.replace("pose_output_", "report_").replace(".mp4", ".csv")
+        video_base = os.path.splitext(os.path.basename(self.video_path))[0]
+        report_name = f"report_{video_base}.csv"
         report_path = os.path.join(report_dir, report_name)
         train_info = self.train_detector.train_info if self.train_detector else None
         generate_report(
