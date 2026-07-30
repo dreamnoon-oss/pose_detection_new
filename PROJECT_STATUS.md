@@ -1,6 +1,6 @@
 # Project Status — 端头门司机行为分析
 
-**Updated:** 2026-07-29
+**Updated:** 2026-07-30
 
 ## Architecture
 
@@ -38,6 +38,13 @@ All rules run independently per frame → timestamped events → mapped to actio
 - Pause: only left panel (right panel removed)
 - Keys: Space=pause, Q=quit, R=draw region, L=draw line, T=track ROI, B=save bg, S=save JSON, Z=reset
 - Confidence mapper created in constructor, passed through all render calls
+- **Idle jump-scan** (`idle_fast_forward=True, idle_jump_seconds=5, auto_exit=True`, all stations):
+  track empty → decode 1 frame per 5s for MAD only; MAD spike → print "疑似列车进站",
+  rewind 5s, per-frame confirm (arrival timestamp exact); false alarm (2s low MAD) → resume jumping.
+  Sampled frames written to output with `FAST-SCAN MAD @ mm:ss` overlay (idle ≈ 125× fast-play in output)
+- **Multi-stop settlement**: on confirmed departure, current stop's events are analysed,
+  stored as a report block, and cleared; last stop settled at video end.
+  All timestamps (train + action events) use real video frame numbers, immune to frame skipping
 
 ### Scenarios
 
@@ -86,8 +93,15 @@ All rules run independently per frame → timestamped events → mapped to actio
 
 ## Recent Changes
 
+- **2026-07-30**:
+  - **跳跃扫描全站推广** (`src/player.py` `idle_jump_seconds=5`): 空闲段 5 秒一跳只解码采样帧算 MAD；采样帧 MAD>20 → "疑似列车进站"，回退 5 秒逐帧确认（到站时间戳精确不变），误报 2 秒后恢复跳跃。采样帧写输出并叠加 `FAST-SCAN MAD @ mm:ss`（空闲段输出 ≈125 倍速快放）。全部 7 个站点脚本启用 `idle_fast_forward + idle_jump_seconds=5 + auto_exit`。
+  - **多趟车按趟结算**: 确认离站时结算本趟事件（分析+报告块+清空），下一趟从零开始；视频结束结算最后一趟。
+  - **单 CSV 多分块报告** (`src/reporter.py`): 一个视频一份报告，每趟一个"第N趟列车"分块；总体评估改为"顺序正确/顺序不正确"，新增"动作是否符合规范（是/否）"（全部检出且顺序正确才为是）。
+  - **真实帧号同步**: `TrainDetector`/`ParallelDetector` 时间戳改用真实视频帧号，跳帧不影响；`TrainDetector` 新增无状态 `measure()`，删除无人使用的 `train_info`。
+  - **删除 `scripts/run_tangqiao_fast.py`**: 跳跃扫描已合并至正式版。
+
 - **2026-07-29**:
-  - **空闲快进模式** (`src/player.py` `idle_fast_forward`): 列车 AWAY 时跳过 YOLO 推理和渲染，每帧只做 MAD 帧差检测（~1ms/帧），到站自动恢复逐帧检测。结束打印快进/检测帧数统计。目前仅 `scripts/run_tangqiao_fast.py` 启用，验证后推广。
+  - **空闲快进模式** (`src/player.py` `idle_fast_forward`): 列车 AWAY 时跳过 YOLO 推理和渲染，每帧只做 MAD 帧差检测（~1ms/帧），到站自动恢复逐帧检测。结束打印快进/检测帧数统计。
   - **自动退出** (`auto_exit`): 视频播完自动生成报告并退出，无需手动按 Q。
   - **输出命名跟随输入视频**: 输出视频 `pose_output_<视频名>.mp4`、报告 `report_<视频名>.csv` 由输入视频名自动生成，不同视频不再互相覆盖。所有站点脚本删除写死的 `output_name`，顶部新增 `OUT_DIR` 配置输出根目录。
   - **脱敏工具高斯模糊模式** (`scripts/video_anonymize.py`): 新增 `MASK_MODE`/`--mode`（mosaic/blur）与 `--blur-strength`（核=区域短边×系数，自适应人脸大小），默认改为 blur；`FACE_EXPAND`/`MIN_FACE_SIZE`/`MOSAIC_BLOCKS` 提升为脚本顶部配置。

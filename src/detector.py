@@ -64,7 +64,7 @@ class ParallelDetector:
             self._first_hit_frames[name] = 0
             self._conf_sums[name] = [0.0, 0.0, 0.0]
 
-    def update(self, keypoints_obj):
+    def update(self, keypoints_obj, frame_number=None):
         """Process one frame against all rules.
 
         Does nothing when ``self.enabled`` is False.
@@ -73,8 +73,14 @@ class ParallelDetector:
             ``(active, new_events)`` where *active* is a dict of rule_name →
             hit-info for rules currently accumulating, and *new_events* is a
             list of events that just completed this frame.
+
+        ``frame_number``: real video frame index; pass it whenever frames may
+        be skipped so event timestamps stay on the true timeline.
         """
-        self.frame_number += 1
+        if frame_number is not None:
+            self.frame_number = frame_number
+        else:
+            self.frame_number += 1
         active = {}
         new_events = []
 

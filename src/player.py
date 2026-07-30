@@ -40,6 +40,7 @@ class VideoPlayer:
                  train_mad_threshold=20,
                  show_arm_bend=False,
                  idle_fast_forward=False,
+                 idle_jump_seconds=0,
                  auto_exit=False):
         self.model = model
         self.video_path = video_path
@@ -57,10 +58,17 @@ class VideoPlayer:
         self.train_mad_threshold = train_mad_threshold
         self.show_arm_bend = show_arm_bend
         self.idle_fast_forward = idle_fast_forward
+        self.idle_jump_seconds = idle_jump_seconds
         self.auto_exit = auto_exit
         self._idle_frames = 0
         self._detect_frames = 0
         self._run_t0 = None
+        # Jump-scan: True = sampling one frame every idle_jump_seconds;
+        # False = per-frame confirm mode after a MAD spike
+        self._jump_scan_active = idle_jump_seconds > 0
+        self._confirm_low_count = 0
+        # One report block per train stop (multi-stop videos)
+        self._stop_blocks = []
 
         self.conf_mapper = ConfidenceColorMapper(
             low_threshold=conf_low_threshold,
@@ -227,14 +235,17 @@ class VideoPlayer:
         if self._run_t0 is None:
             self._run_t0 = t0
 
+        cur_frame = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES))
+
         # Idle fast-forward: no train in station -> skip YOLO + rendering
         if (self.idle_fast_forward and self.train_detector is not None
                 and self.train_detector.state == 'AWAY'):
-            return self._process_idle_frame(frame)
+            if self.idle_jump_seconds > 0 and self._jump_scan_active:
+                return self._process_jump_scan(frame, cur_frame)
+            return self._process_idle_frame(frame, cur_frame)
         self._detect_frames += 1
 
         # Pose detection
-        cur_frame = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES))
         if (self.frame_skip <= 0 or cur_frame % (self.frame_skip + 1) == 0
                 or self._last_results is None):
             results = self.model(frame, verbose=False, conf=self.model_conf,
@@ -251,7 +262,7 @@ class VideoPlayer:
                 results[0].boxes = results[0].boxes[[results[0].boxes.conf.argmax().item()]]
 
         # Parallel detection
-        active, new_events = self.detector.update(kp)
+        active, new_events = self.detector.update(kp, cur_frame)
         self._last_active = active
         self._last_kp = kp
 
@@ -273,7 +284,7 @@ class VideoPlayer:
         # Train detection (background only, result printed at end)
         if self.train_detector is not None:
             prev_state = self.train_detector.state
-            train_state, train_mad = self.train_detector.update(frame)
+            train_state, train_mad = self.train_detector.update(frame, cur_frame)
             self._last_train_state = train_state
             self._last_train_mad = train_mad
             # Enable action detection when train arrives
@@ -281,6 +292,11 @@ class VideoPlayer:
                 self.detector.enable()
             elif prev_state == 'PRESENT' and train_state != 'PRESENT':
                 self.detector.enabled = False
+                # Departure confirmed: settle this stop's events into a
+                # report block so the next train starts from a clean slate
+                self._settle_stop()
+                self._jump_scan_active = self.idle_jump_seconds > 0
+                self._confirm_low_count = 0
         td = self.train_detector
         viz.draw_train_status(annotated, self._last_train_state, self._last_train_mad,
                               hold_counter=(td.hold_counter if td else 0),
@@ -310,16 +326,28 @@ class VideoPlayer:
         wait_ms = max(1, self.delay - int(infer_ms))
         return cv2.waitKey(wait_ms) & 0xFF
 
-    def _process_idle_frame(self, frame):
+    def _process_idle_frame(self, frame, cur_frame):
         """Fast path while the track is empty: MAD check only, no YOLO/render."""
         self._idle_frames += 1
 
         prev_state = self.train_detector.state
-        train_state, train_mad = self.train_detector.update(frame)
+        train_state, train_mad = self.train_detector.update(frame, cur_frame)
         self._last_train_state = train_state
         self._last_train_mad = train_mad
         if prev_state != 'PRESENT' and train_state == 'PRESENT':
             self.detector.enable()
+        elif (self.idle_jump_seconds > 0 and train_state == 'AWAY'):
+            # Confirm mode: spike gone for ~2s -> back to jump scanning
+            if train_mad > self.train_detector.high_threshold:
+                self._confirm_low_count = 0
+            else:
+                self._confirm_low_count += 1
+                if self._confirm_low_count >= int(self.fps * 2):
+                    self._jump_scan_active = True
+                    self._confirm_low_count = 0
+                    ts = cur_frame / self.fps if self.fps else 0
+                    print(f">>> 疑似列车进站解除: {ts:.1f}s (frame {cur_frame}), "
+                          f"恢复跳跃扫描")
 
         self._last_raw_frame = frame.copy()
         td = self.train_detector
@@ -329,15 +357,68 @@ class VideoPlayer:
         self._last_frame = frame
         self.out.write(frame)
 
-        cur = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES))
-        if cur % 10 == 0 and self._window_exists():
+        if cur_frame % 10 == 0 and self._window_exists():
             self._setting_trackbar = True
-            cv2.setTrackbarPos("Progress", self.window_name, cur)
+            cv2.setTrackbarPos("Progress", self.window_name, cur_frame)
             self._setting_trackbar = False
-            viz.draw_frame_info(frame, cur, self.total_frames, self.fps)
+            viz.draw_frame_info(frame, cur_frame, self.total_frames, self.fps)
             cv2.putText(frame, ">>> FAST-FORWARD (track empty) >>>",
                         (10, self.height - 20),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+            cv2.imshow(self.window_name, frame)
+            return cv2.waitKey(1) & 0xFF
+        return None
+
+    def _process_jump_scan(self, frame, cur_frame):
+        """Jump-scan while the track is empty: sample one frame every
+        ``idle_jump_seconds``. On a MAD spike, rewind one jump and switch to
+        per-frame confirm mode so arrival timing stays exact."""
+        td = self.train_detector
+        jump = max(1, int(self.fps * self.idle_jump_seconds))
+
+        mad = td.measure(frame)
+        td.frame_num = cur_frame
+        td.mad = mad
+        self._last_train_state = td.state
+        self._last_train_mad = mad
+        self._last_raw_frame = frame.copy()
+
+        if mad > td.high_threshold:
+            # Possible train: rewind one jump, confirm frame by frame
+            back = max(0, cur_frame - 1 - jump)
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, back)
+            td.hold_counter = 0
+            self._jump_scan_active = False
+            self._confirm_low_count = 0
+            ts = cur_frame / self.fps if self.fps else 0
+            back_ts = back / self.fps if self.fps else 0
+            print(f">>> 跳跃扫描发现疑似列车进站 (MAD={mad:.1f} @ {ts:.1f}s), "
+                  f"回退至 {back_ts:.1f}s (frame {back}) 逐帧确认")
+            return None
+
+        self._idle_frames += jump
+
+        # Sampled frame goes to output with its real timestamp + MAD
+        ts = cur_frame / self.fps if self.fps else 0
+        label = f">>> FAST-SCAN  MAD={mad:.1f}  @ {int(ts // 60):02d}:{ts % 60:04.1f}"
+        cv2.putText(frame, label, (10, self.height - 20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+        viz.draw_train_status(frame, td.state, mad,
+                              hold_counter=td.hold_counter,
+                              hold_target=td.hold_target)
+        self._last_frame = frame
+        self.out.write(frame)
+
+        # Skip ahead: next read lands one jump later
+        target = min(cur_frame - 1 + jump, self.total_frames - 1)
+        if target > cur_frame - 1:
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, target)
+
+        if self._window_exists():
+            self._setting_trackbar = True
+            cv2.setTrackbarPos("Progress", self.window_name, cur_frame)
+            self._setting_trackbar = False
+            viz.draw_frame_info(frame, cur_frame, self.total_frames, self.fps)
             cv2.imshow(self.window_name, frame)
             return cv2.waitKey(1) & 0xFF
         return None
@@ -427,6 +508,8 @@ class VideoPlayer:
             if self.train_detector is not None:
                 self.train_detector.reset(self._trackbar_pos)
                 self.detector.enabled = False
+                self._jump_scan_active = self.idle_jump_seconds > 0
+                self._confirm_low_count = 0
             results = self.model(frame, verbose=False, conf=self.model_conf,
                                  imgsz=self.imgsz, half=self.half)
             kp = results[0].keypoints if (results and results[0].keypoints is not None) else None
@@ -435,7 +518,7 @@ class VideoPlayer:
                 results[0].keypoints = kp
                 if results[0].boxes is not None and len(results[0].boxes) > len(kp):
                     results[0].boxes = results[0].boxes[[results[0].boxes.conf.argmax().item()]]
-            active, _ = self.detector.update(kp)
+            active, _ = self.detector.update(kp, int(self.cap.get(cv2.CAP_PROP_POS_FRAMES)))
             self._last_active = active
             self._last_results = results
             self._last_frame = viz.draw_pose(frame, results, self.conf_mapper)
@@ -444,7 +527,8 @@ class VideoPlayer:
                                  self._track_roi_name)
             viz.draw_confidence_legend(self._last_frame, self.conf_mapper)
             if self.train_detector is not None:
-                train_state, train_mad = self.train_detector.update(frame)
+                train_state, train_mad = self.train_detector.update(
+                    frame, int(self.cap.get(cv2.CAP_PROP_POS_FRAMES)))
                 self._last_train_state = train_state
                 self._last_train_mad = train_mad
             self._last_frame, status_bottom = viz.draw_status_overlay(
@@ -547,15 +631,52 @@ class VideoPlayer:
             self._last_train_mad = 0.0
             print(f"列车检测已激活  track_roi={track_name}")
 
-    def _run_analysis(self, frame):
-        """Run sequence analysis on the recorded events and overlay results."""
+    def _settle_stop(self):
+        """Settle one train stop: analyse its events, store a report block,
+        then clear events so the next stop starts from a clean slate."""
         analyzer = SequenceAnalyzer(
             self.detector.events, self.action_mapping, fps=self.fps)
-        self._analysis = analyzer.analyze()
-        print("\n" + analyzer.summary())
+        analysis = analyzer.analyze()
+        self._analysis = analysis
+        n = len(self._stop_blocks) + 1
+        print(f"\n===== 第{n}趟列车结算 =====")
+        print(analyzer.summary())
+
+        arrive = depart = duration = None
         if self.train_detector is not None:
+            arrives = [ts for _f, ts, e in self.train_detector.events
+                       if e == 'arrived']
+            departs = [ts for _f, ts, e in self.train_detector.events
+                       if e == 'departed']
+            if arrives:
+                arrive = f"{arrives[-1]:.1f}s"
+            if departs and (not arrives or departs[-1] >= arrives[-1]):
+                depart = f"{departs[-1]:.1f}s"
+                if arrives:
+                    duration = f"{departs[-1] - arrives[-1]:.1f}s"
+
+        self._stop_blocks.append({
+            "arrive": arrive,
+            "depart": depart,
+            "duration": duration,
+            "action_results": analysis['actions'],
+        })
+        self.detector.events.clear()
+
+    def _run_analysis(self, frame):
+        """Settle remaining events and generate the final multi-stop report."""
+        td = self.train_detector
+        # Last train still in station (or just departed without settling)
+        if self.detector.events or (td is not None and td.state == 'PRESENT'):
+            self._settle_stop()
+        # No train detection configured: treat the whole video as one stop
+        if td is None and not self._stop_blocks:
+            self._settle_stop()
+
+        if td is not None:
             end_time = self.total_frames / self.fps if self.fps else 0
-            print("\n" + self.train_detector.summary(end_time))
+            print("\n" + td.summary(end_time))
+            print(f"共检测到 {len(self._stop_blocks)} 趟列车停靠")
 
         # Generate CSV report (named after the input video file)
         script_name = os.path.basename(sys.argv[0])
@@ -564,7 +685,6 @@ class VideoPlayer:
         video_base = os.path.splitext(os.path.basename(self.video_path))[0]
         report_name = f"report_{video_base}.csv"
         report_path = os.path.join(report_dir, report_name)
-        train_info = self.train_detector.train_info if self.train_detector else None
         generate_report(
             report_path,
             station_name=self.station_name,
@@ -574,12 +694,14 @@ class VideoPlayer:
             model_path=self.model_path,
             imgsz=self.imgsz,
             model_conf=self.model_conf,
-            train_summary=train_info,
-            action_results=self._analysis['actions'],
+            stops=self._stop_blocks,
             action_mapping=self.action_mapping,
             detection_kwargs=self.detector.detection_kwargs,
             rules=self.detector.rules,
         )
         print(f"检测报告已保存到: {report_path}")
 
+        if self._analysis is None:
+            self._analysis = SequenceAnalyzer(
+                [], self.action_mapping, fps=self.fps).analyze()
         return viz.draw_analysis_result(frame, self._analysis)

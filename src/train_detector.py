@@ -31,10 +31,8 @@ class TrainDetector:
         self.hold_target = arrive_frames  # current target (may change on state switch)
         self.events = []
 
-    def update(self, frame):
-        """Process one frame. Returns ``(state, mad)``."""
-        self.frame_num += 1
-
+    def measure(self, frame):
+        """Compute MAD against the background without touching detector state."""
         x, y, w, h = self.roi
         fh, fw = frame.shape[:2]
         x, y = max(0, min(x, fw - 1)), max(0, min(y, fh - 1))
@@ -43,8 +41,21 @@ class TrainDetector:
         roi_cur = frame[y:y + h, x:x + w]
         roi_bg = self.background[y:y + h, x:x + w]
 
-        self.mad = float(np.mean(np.abs(
+        return float(np.mean(np.abs(
             roi_cur.astype(float) - roi_bg.astype(float))))
+
+    def update(self, frame, frame_num=None):
+        """Process one frame. Returns ``(state, mad)``.
+
+        ``frame_num``: real video frame index; pass it whenever frames may be
+        skipped so arrival/departure timestamps stay on the true timeline.
+        """
+        if frame_num is not None:
+            self.frame_num = frame_num
+        else:
+            self.frame_num += 1
+
+        self.mad = self.measure(frame)
 
         if self.state == 'AWAY':
             if self.mad > self.high_threshold:
@@ -111,18 +122,3 @@ class TrainDetector:
             'PRESENT': '列车在场',
         }
         return labels.get(self.state, self.state)
-
-    @property
-    def train_info(self):
-        """Return structured arrival/departure info for reporting."""
-        info = {"arrive": None, "depart": None, "duration": None}
-        for _frame, ts, etype in self.events:
-            if etype == 'arrived':
-                info["arrive"] = f"{ts:.1f}s"
-            elif etype == 'departed':
-                info["depart"] = f"{ts:.1f}s"
-        if info["arrive"] and info["depart"]:
-            t_arrive = next(ts for f, ts, e in self.events if e == 'arrived')
-            t_depart = next(ts for f, ts, e in self.events if e == 'departed')
-            info["duration"] = f"{t_depart - t_arrive:.1f}s"
-        return info

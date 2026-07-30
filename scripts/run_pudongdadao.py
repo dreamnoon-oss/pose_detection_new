@@ -70,5 +70,8 @@ if __name__ == "__main__":
         imgsz=640, frame_skip=0,
         conf_low_threshold=0.3, conf_mid_threshold=0.6,
         train_mad_threshold=20,
+        idle_fast_forward=True,
+        idle_jump_seconds=5,
+        auto_exit=True,
     )
     player.run()

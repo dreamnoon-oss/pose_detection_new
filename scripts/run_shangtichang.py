@@ -14,12 +14,12 @@ from src.player import VideoPlayer
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-VIDEO_PATH = r"D:\科研\申通技术中心\端头门司机行为分析\上体场2.mp4"
+VIDEO_PATH = r"\\10.151.2.205\共享文件2\temp\上体场15min_test.mp4"
 MODEL_PATH = str(Path(MODEL_DIR) / "yolo26x-pose.pt")
 ANNOTATIONS_FILE = str(Path(DATA_DIR) / "regions_shangtichang.json")
 
 # 输出配置：视频存到 OUT_DIR/video/，报告存到 OUT_DIR/report/，文件名自动跟随输入视频名
-OUT_DIR = str(Path(OUTPUT_DIR))    # 输出根目录，可改成任意路径
+OUT_DIR = r"\\10.151.2.205\共享文件2\temp"     # 输出根目录，可改成任意路径
 
 # ---------------------------------------------------------------------------
 # Detection rules (unique conditions; each runs independently)
@@ -68,5 +68,8 @@ if __name__ == "__main__":
         imgsz=640, frame_skip=0,
         conf_low_threshold=0.3, conf_mid_threshold=0.6,
         train_mad_threshold=20,
+        idle_fast_forward=True,
+        idle_jump_seconds=5,
+        auto_exit=True,
     )
     player.run()
