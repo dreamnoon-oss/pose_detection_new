@@ -1,6 +1,6 @@
 # Project Status — 端头门司机行为分析
 
-**Updated:** 2026-07-30
+**Updated:** 2026-07-31
 
 ## Architecture
 
@@ -92,6 +92,9 @@ All rules run independently per frame → timestamped events → mapped to actio
 | dynamic_angle_coeff | 0.6 | elbow bend compensation for 2D foreshortening |
 
 ## Recent Changes
+
+- **2026-07-31**:
+  - **报告时间改为时分秒格式** (`src/timefmt.py` 新增): CSV 报告中的列车到站/离站/停靠时长、动作检测时间统一为 `HH:MM:SS`（整数秒，四舍五入）。仅报告文档生效，控制台打印和视频叠加仍为秒数。整数秒格式避免 Excel 将带小数秒的时间套用 `mm:ss.0` 格式而丢失小时位。
 
 - **2026-07-30**:
   - **跳跃扫描全站推广** (`src/player.py` `idle_jump_seconds=5`): 空闲段 5 秒一跳只解码采样帧算 MAD；采样帧 MAD>20 → "疑似列车进站"，回退 5 秒逐帧确认（到站时间戳精确不变），误报 2 秒后恢复跳跃。采样帧写输出并叠加 `FAST-SCAN MAD @ mm:ss`（空闲段输出 ≈125 倍速快放）。全部 7 个站点脚本启用 `idle_fast_forward + idle_jump_seconds=5 + auto_exit`。

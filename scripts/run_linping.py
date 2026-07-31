@@ -14,7 +14,7 @@ from src.player import VideoPlayer
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-VIDEO_PATH = r"\\10.151.2.205\共享文件2\短视频\临平\clipped_segments\临平3.mp4"  # TODO: fill in video path
+VIDEO_PATH = r"\\10.151.2.205\共享文件2\temp\临平15min_test.mp4"  # TODO: fill in video path
 MODEL_PATH = str(Path(MODEL_DIR) / "yolo26x-pose.pt")
 ANNOTATIONS_FILE = str(Path(DATA_DIR) / "regions_linping.json")
 

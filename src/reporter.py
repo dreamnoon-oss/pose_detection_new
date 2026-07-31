@@ -5,6 +5,8 @@ import datetime
 import os
 import io
 
+from .timefmt import format_hms
+
 
 STANDARD_ACTIONS = [
     "开门后手指呼唤",
@@ -126,7 +128,7 @@ def _write_stop_actions(w, action_results, action_mapping):
         if found is None and result is None:
             row += ["不需要", "—", "—", "—", "—", "—"]
         elif found:
-            ts = f"{result['timestamp']:.1f}s" if result.get('timestamp') else "—"
+            ts = format_hms(result['timestamp']) if result.get('timestamp') else "—"
             row += ["已检测", ts,
                     _fmt(result.get('conf')),
                     _fmt(result.get('hit_rate')),

@@ -14,7 +14,7 @@ from src.player import VideoPlayer
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-VIDEO_PATH = r"\\10.151.2.205\共享文件2\temp\上体场15min_test.mp4"
+VIDEO_PATH = r"\\10.151.2.205\共享文件2\司机行为规范样本采样\短视频\上体场2.mp4"
 MODEL_PATH = str(Path(MODEL_DIR) / "yolo26x-pose.pt")
 ANNOTATIONS_FILE = str(Path(DATA_DIR) / "regions_shangtichang.json")
 

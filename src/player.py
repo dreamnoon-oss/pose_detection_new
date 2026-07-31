@@ -14,6 +14,7 @@ from .analyzer import SequenceAnalyzer
 from .confidence_color import ConfidenceColorMapper
 from .config import CONF_LOW_THRESHOLD, CONF_MID_THRESHOLD, REPORT_OUTPUT_DIR
 from .reporter import generate_report
+from .timefmt import format_hms
 from .train_detector import TrainDetector
 
 
@@ -649,11 +650,11 @@ class VideoPlayer:
             departs = [ts for _f, ts, e in self.train_detector.events
                        if e == 'departed']
             if arrives:
-                arrive = f"{arrives[-1]:.1f}s"
+                arrive = format_hms(arrives[-1])
             if departs and (not arrives or departs[-1] >= arrives[-1]):
-                depart = f"{departs[-1]:.1f}s"
+                depart = format_hms(departs[-1])
                 if arrives:
-                    duration = f"{departs[-1] - arrives[-1]:.1f}s"
+                    duration = format_hms(departs[-1] - arrives[-1])
 
         self._stop_blocks.append({
             "arrive": arrive,
