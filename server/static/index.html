@@ -3,87 +3,117 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Cache-Control" content="no-store" />
   <title>地铁司机标准化作业行为智能分析系统</title>
-  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/style.css?v=3" />
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">地铁司机标准化作业行为智能分析系统</div>
+    <div class="brand">
+      <span class="brand-logo"></span>
+      <span>司机行为智能分析系统</span>
+    </div>
     <nav class="nav">
-      <button class="nav-btn active" data-tab="detect">检测分析</button>
-      <button class="nav-btn" data-tab="annotate">标注工具</button>
+      <a class="nav-btn" href="#/detect" data-page="detect">检测分析</a>
+      <a class="nav-btn" href="#/annotate" data-page="annotate">标注工具</a>
     </nav>
     <div class="model-badge" id="modelBadge">模型: 检测中…</div>
   </header>
 
   <main>
-    <!-- ===================== 检测分析 ===================== -->
-    <section id="tab-detect" class="tab active">
-      <div class="panel">
-        <div class="row">
-          <label>线路
-            <select id="detectLine"></select>
-          </label>
-          <label>站点
-            <select id="detectStation"></select>
-          </label>
-          <div class="badge" id="detectAnnotationBadge">标注状态: —</div>
+    <!-- ===================== 页面一：检测分析 ===================== -->
+    <section id="page-detect" class="page">
+      <div class="page-head">
+        <h1>检测分析</h1>
+        <p>加载端头门监控视频，调用 YOLO 姿态估计算法自动识别司机标准化作业行为，输出检测视频与 CSV 报告。</p>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-head">站点选择</div>
+          <div class="card-body">
+            <div class="form-row">
+              <label>线路
+                <select id="detectLine"></select>
+              </label>
+              <label>站点
+                <select id="detectStation"></select>
+              </label>
+            </div>
+            <div class="badge" id="detectAnnotationBadge">标注状态: —</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">视频加载</div>
+          <div class="card-body">
+            <div class="form-row">
+              <button id="btnLoadVideo" class="btn primary">选择视频文件</button>
+              <input type="file" id="videoFileInput" accept="video/*" hidden />
+              <button id="btnLoadPath" class="btn">服务器本地路径</button>
+            </div>
+            <div class="video-name" id="videoName">未加载视频</div>
+            <div class="sub-text" id="videoMeta">时长 — | 分辨率 — | 帧率 —</div>
+          </div>
         </div>
       </div>
 
-      <div class="panel">
-        <div class="row">
-          <button id="btnLoadVideo" class="btn">选择视频文件</button>
-          <input type="file" id="videoFileInput" accept="video/*" hidden />
-          <button id="btnLoadPath" class="btn ghost">使用服务器本地路径</button>
-          <div class="video-name" id="videoName">未加载视频</div>
-        </div>
-        <div class="row sub">
-          <span id="videoMeta">时长 — | 分辨率 — | 帧率 —</span>
-        </div>
-        <div class="row">
-          <span class="label">运行模式</span>
-          <label class="radio"><input type="radio" name="mode" value="play" checked /> 仅播放</label>
-          <label class="radio"><input type="radio" name="mode" value="detect" /> 开启检测</label>
-          <div class="badge" id="detectStatusBadge">检测状态: 待检测</div>
-          <button id="btnStartDetect" class="btn primary">开始检测</button>
-          <button id="btnStopDetect" class="btn danger" disabled>停止</button>
-          <span class="muted" id="detectHint"></span>
+      <div class="card">
+        <div class="card-head">检测控制</div>
+        <div class="card-body">
+          <div class="form-row">
+            <span class="field-label">运行模式</span>
+            <label class="radio"><input type="radio" name="mode" value="play" checked /> 仅播放</label>
+            <label class="radio"><input type="radio" name="mode" value="detect" /> 开启检测</label>
+            <div class="badge" id="detectStatusBadge">检测状态: 待检测</div>
+            <button id="btnStartDetect" class="btn primary">开始检测</button>
+            <button id="btnStopDetect" class="btn danger" disabled>停止</button>
+            <span class="sub-text" id="detectHint"></span>
+          </div>
         </div>
       </div>
 
-      <div class="panel collapsible" id="paramPanel">
-        <button class="panel-head" id="paramToggle">
+      <div class="card collapsible" id="paramPanel">
+        <button class="card-head toggle-head" id="paramToggle">
           <span>参数配置</span><span class="chevron">▾</span>
         </button>
-        <div class="param-grid" id="paramGrid"></div>
-      </div>
-
-      <div class="panel">
-        <div class="video-wrap">
-          <video id="videoPlayer" controls></video>
-        </div>
-        <div class="progress-row">
-          <span id="playerTime">00:00 / 00:00</span>
-          <span id="playerSourceLabel">源视频</span>
-          <label class="checkbox"><input type="checkbox" id="chkDetected" /> 播放检测结果视频</label>
+        <div class="card-body">
+          <div class="param-grid" id="paramGrid"></div>
         </div>
       </div>
 
-      <div class="panel" id="trainEventsPanel" hidden>
-        <div class="panel-title">列车到站事件</div>
-        <ul class="event-list" id="trainEventList"></ul>
+      <div class="card">
+        <div class="card-head">视频播放</div>
+        <div class="card-body">
+          <div class="video-wrap">
+            <video id="videoPlayer" controls></video>
+          </div>
+          <div class="player-bar">
+            <span id="playerTime">00:00 / 00:00</span>
+            <span id="playerSourceLabel">源视频</span>
+            <label class="checkbox"><input type="checkbox" id="chkDetected" /> 播放检测结果视频</label>
+          </div>
+        </div>
       </div>
 
-      <div class="panel">
-        <div class="panel-title">检测结果下载</div>
-        <div class="row">
-          <button id="btnDownloadVideo" class="btn primary" disabled>下载检测视频</button>
-          <button id="btnDownloadReport" class="btn primary" disabled>下载 CSV 报告</button>
+      <div class="card" id="trainEventsPanel" hidden>
+        <div class="card-head">列车到站事件</div>
+        <div class="card-body">
+          <ul class="event-list" id="trainEventList"></ul>
         </div>
-        <div class="row sub" id="outputPaths" hidden>
-          <div class="path-line" id="outputVideoPath"></div>
-          <div class="path-line" id="outputReportPath"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">检测结果下载</div>
+        <div class="card-body">
+          <div class="form-row">
+            <button id="btnDownloadVideo" class="btn primary" disabled>下载检测视频</button>
+            <button id="btnDownloadReport" class="btn primary" disabled>下载 CSV 报告</button>
+          </div>
+          <div class="sub-text" id="outputPaths" hidden>
+            <div class="path-line" id="outputVideoPath"></div>
+            <div class="path-line" id="outputReportPath"></div>
+          </div>
         </div>
       </div>
 
@@ -92,56 +122,77 @@
       </div>
     </section>
 
-    <!-- ===================== 标注工具 ===================== -->
-    <section id="tab-annotate" class="tab">
-      <div class="panel">
-        <div class="row">
-          <label>线路
-            <select id="annoLine"></select>
-          </label>
-          <label>站点
-            <select id="annoStation"></select>
-          </label>
-          <div class="badge" id="annoBadge">标注状态: —</div>
+    <!-- ===================== 页面二：标注工具 ===================== -->
+    <section id="page-annotate" class="page">
+      <div class="page-head">
+        <h1>标注工具</h1>
+        <p>可视化标注检测区域、参考线与轨道 ROI，标注数据与线路站点绑定保存，供检测分析直接调用。</p>
+      </div>
+
+      <div class="card">
+        <div class="card-head">站点选择</div>
+        <div class="card-body">
+          <div class="form-row">
+            <label>线路
+              <select id="annoLine"></select>
+            </label>
+            <label>站点
+              <select id="annoStation"></select>
+            </label>
+            <div class="badge" id="annoBadge">标注状态: —</div>
+          </div>
         </div>
       </div>
 
-      <div class="panel">
-        <div class="toolbar">
-          <button class="tool active" data-tool="select">选择</button>
-          <button class="tool" data-tool="rect">矩形</button>
-          <button class="tool" data-tool="line">线段</button>
-          <button class="tool" data-tool="track">轨道ROI</button>
-          <button class="tool" data-tool="delete">删除</button>
-          <span class="sep"></span>
-          <button class="tool" data-tool="pan">平移</button>
-          <span class="sep"></span>
-          <button id="btnUndo" class="btn ghost">撤销</button>
-          <button id="btnRedo" class="btn ghost">重做</button>
-        </div>
-        <div class="toolbar">
-          <button id="btnLoadBg" class="btn ghost">加载背景图</button>
-          <button id="btnExtractFrame" class="btn ghost">从视频提取帧</button>
-          <button id="btnSaveAnno" class="btn primary">保存标注</button>
-          <button id="btnExportJson" class="btn ghost">导出 JSON</button>
-          <button id="btnExportBg" class="btn ghost">导出背景图</button>
-          <button id="btnImportJson" class="btn ghost">导入 JSON</button>
-          <input type="file" id="annoFileInput" accept=".json,image/*" hidden />
+      <div class="card">
+        <div class="card-head">工具栏</div>
+        <div class="card-body">
+          <div class="toolbar">
+            <button class="tool active" data-tool="select">选择</button>
+            <button class="tool" data-tool="rect">矩形</button>
+            <button class="tool" data-tool="line">线段</button>
+            <button class="tool" data-tool="track">轨道ROI</button>
+            <button class="tool" data-tool="delete">删除</button>
+            <span class="sep"></span>
+            <button class="tool" data-tool="pan">平移</button>
+            <span class="sep"></span>
+            <button id="btnUndo" class="btn">撤销</button>
+            <button id="btnRedo" class="btn">重做</button>
+          </div>
+          <div class="toolbar">
+            <button id="btnLoadBg" class="btn">加载背景图</button>
+            <button id="btnExtractFrame" class="btn">从视频提取帧</button>
+            <button id="btnImportJson" class="btn">导入 JSON</button>
+            <button id="btnSaveAnno" class="btn primary">保存标注</button>
+            <button id="btnExportJson" class="btn">导出 JSON</button>
+            <button id="btnExportBg" class="btn">导出背景图</button>
+            <input type="file" id="annoFileInput" accept=".json,image/*" hidden />
+          </div>
         </div>
       </div>
 
       <div class="anno-layout">
-        <div class="canvas-wrap" id="canvasWrap">
-          <canvas id="annoCanvas"></canvas>
-          <div class="canvas-hint" id="canvasHint">选择线路与站点后自动加载标注，或加载背景图开始标注</div>
+        <div class="card canvas-card">
+          <div class="canvas-wrap" id="canvasWrap">
+            <canvas id="annoCanvas"></canvas>
+            <div class="canvas-hint" id="canvasHint">选择线路与站点后自动加载标注，或加载背景图开始标注</div>
+          </div>
         </div>
         <aside class="anno-side">
-          <div class="panel-title">属性面板</div>
-          <div class="prop-panel" id="propPanel">
-            <div class="muted">未选中元素</div>
+          <div class="card">
+            <div class="card-head">属性面板</div>
+            <div class="card-body">
+              <div class="prop-panel" id="propPanel">
+                <div class="muted">未选中元素</div>
+              </div>
+            </div>
           </div>
-          <div class="panel-title">标注列表</div>
-          <div class="anno-list" id="annoList"></div>
+          <div class="card">
+            <div class="card-head">标注列表</div>
+            <div class="card-body">
+              <div class="anno-list" id="annoList"></div>
+            </div>
+          </div>
         </aside>
       </div>
 
@@ -162,6 +213,6 @@
 
   <div id="toast" class="toast" hidden></div>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=3"></script>
 </body>
 </html>

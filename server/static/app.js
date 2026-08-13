@@ -433,11 +433,13 @@ function ensurePlayableSource() {
       v.src = `/api/result/video/stream?t=${Date.now()}`;
       v.load();
     }
+    $("#playerSourceLabel").textContent = "检测结果视频";
   } else {
     if (!v.src.includes("/api/video/stream")) {
       v.src = `/api/video/stream?t=${Date.now()}`;
       v.load();
     }
+    $("#playerSourceLabel").textContent = "源视频";
   }
 }
 
@@ -455,13 +457,14 @@ function renderResultSummary(result) {
 
 function promptModal(title, bodyHtml, placeholder) {
   return new Promise((resolve) => {
-    $("#modal").hidden = false;
+    const modal = $("#modal");
+    modal.classList.add("open");
     $("#modalTitle").textContent = title;
     $("#modalBody").innerHTML = bodyHtml;
     const ok = $("#modalOk");
     const cancel = $("#modalCancel");
-    ok.onclick = () => { $("#modal").hidden = true; resolve($("#modalInput") ? $("#modalInput").value : true); };
-    cancel.onclick = () => { $("#modal").hidden = true; resolve(null); };
+    ok.onclick = () => { modal.classList.remove("open"); resolve($("#modalInput") ? $("#modalInput").value : true); };
+    cancel.onclick = () => { modal.classList.remove("open"); resolve(null); };
   });
 }
 
@@ -1176,14 +1179,22 @@ function initAnnoButtons() {
   $("#btnExportBg").onclick = exportBackground;
 }
 
+function switchPage(name) {
+  $$(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.page === name));
+  $$(".page").forEach((p) => p.classList.toggle("active", p.id === `page-${name}`));
+  if (name === "annotate") resizeCanvas();
+}
+
 function initNav() {
   $$(".nav-btn").forEach((b) => b.addEventListener("click", () => {
-    $$(".nav-btn").forEach((x) => x.classList.remove("active"));
-    b.classList.add("active");
-    $$(".tab").forEach((t) => t.classList.remove("active"));
-    $(`#tab-${b.dataset.tab}`).classList.add("active");
-    if (b.dataset.tab === "annotate") resizeCanvas();
+    location.hash = "/" + b.dataset.page;
   }));
+  window.addEventListener("hashchange", () => {
+    const name = location.hash.replace(/^#\//, "");
+    switchPage(name === "annotate" ? "annotate" : "detect");
+  });
+  const initial = location.hash.replace(/^#\//, "");
+  switchPage(initial === "annotate" ? "annotate" : "detect");
 }
 
 async function boot() {
