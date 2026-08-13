@@ -6,10 +6,17 @@ Usage:
 """
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+# Performance tuning for Apple Silicon (must be set before torch is imported):
+# MPS ops without a native kernel fall back to CPU instead of crashing,
+# and OpenMP/numpy get all CPU cores for decode + pre/post-processing.
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+os.environ.setdefault("OMP_NUM_THREADS", str(os.cpu_count() or 8))
 
 import uvicorn
 

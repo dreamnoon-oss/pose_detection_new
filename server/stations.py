@@ -219,6 +219,8 @@ DEFAULT_PARAMS = {
     "idle_jump_seconds": 5,        # idle jump-scan interval (seconds)
     "conf_low_threshold": 0.3,     # red keypoints below this
     "conf_mid_threshold": 0.6,     # yellow below this, green above
+    "device": "auto",              # auto → mps (Apple Silicon) / cuda / cpu
+    "half": True,                  # FP16 inference (mps/cuda only)
 }
 
 # ---------------------------------------------------------------------------

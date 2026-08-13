@@ -453,4 +453,12 @@ def annotation_stations(line: str | None = None):
 
 @app.get("/api/model/status")
 def model_status():
-    return {"available": os.path.exists(DEFAULT_MODEL), "path": DEFAULT_MODEL}
+    from src.device import mps_available, resolve_device
+    dev = resolve_device()
+    return {
+        "available": os.path.exists(DEFAULT_MODEL),
+        "path": DEFAULT_MODEL,
+        "device": dev,
+        "mps_available": mps_available(),
+        "half_supported": dev.startswith("cuda") or dev == "mps",
+    }

@@ -19,23 +19,43 @@ from src.analyzer import SequenceAnalyzer
 from src.annotation import load_annotations, load_background_info
 from src.confidence_color import ConfidenceColorMapper
 from src.detector import ParallelDetector
+from src.device import resolve_device, tune_threads, use_half
 from src.reporter import generate_report
 from src.timefmt import format_hms
 from src.train_detector import TrainDetector
 
 _MODEL_LOCK = threading.Lock()
-_MODEL_CACHE = {"path": None, "model": None}
+_MODEL_CACHE = {"key": None, "model": None, "device": None}
 
 
-def get_model(model_path):
-    """Load (and cache) the YOLO model. Thread-safe."""
+def get_model(model_path, device="auto", half=True):
+    """Load (and cache) the YOLO model on the best device. Thread-safe.
+
+    On Apple Silicon this resolves to ``mps``; the model is moved to the
+    device once, FP16 is applied when supported, and a tiny warmup inference
+    triggers graph compilation so the first real frame is fast.
+    """
+    dev = resolve_device(device)
+    hf = use_half(dev, half)
+    cache_key = (model_path, dev, hf)
+
     with _MODEL_LOCK:
-        if _MODEL_CACHE["path"] == model_path and _MODEL_CACHE["model"] is not None:
+        if _MODEL_CACHE["key"] == cache_key and _MODEL_CACHE["model"] is not None:
             return _MODEL_CACHE["model"]
+
         from ultralytics import YOLO
+        tune_threads()
         model = YOLO(model_path)
-        _MODEL_CACHE["path"] = model_path
+        model.to(dev)
+        quant = 16 if hf else None
+        try:
+            dummy = np.zeros((128, 128, 3), dtype=np.uint8)
+            model(dummy, verbose=False, imgsz=64, quantize=quant, device=dev)
+        except Exception:
+            pass
+        _MODEL_CACHE["key"] = cache_key
         _MODEL_CACHE["model"] = model
+        _MODEL_CACHE["device"] = dev
         return model
 
 
@@ -148,6 +168,8 @@ class DetectionJob:
         self._jump_scan_active = False
         self._confirm_low_count = 0
         self._train_events = []          # collected (frame, ts, type)
+        self.device = resolve_device(params.get("device", "auto"))
+        self.half = use_half(self.device, params.get("half", True))
 
     # ------------------------------------------------------------------
     # Public
@@ -174,7 +196,7 @@ class DetectionJob:
             raise FileNotFoundError(f"未找到视频文件: {self.video_path}")
 
         self.state.update(message="加载模型…")
-        self.model = get_model(self.model_path)
+        self.model = get_model(self.model_path, device=self.device, half=self.half)
 
         regions, lines = load_annotations(self.annotations_file)
         if not self.rules:
@@ -286,8 +308,9 @@ class DetectionJob:
     def _process_detect_frame(self, frame, cur_frame):
         model_conf = self.params.get("model_conf", 0.5)
         imgsz = self.params.get("imgsz", 640)
+        quant = 16 if self.half else None
         results = self.model(frame, verbose=False, conf=model_conf,
-                             imgsz=imgsz, half=False)
+                             imgsz=imgsz, quantize=quant, device=self.device)
         kp = results[0].keypoints if (results and results[0].keypoints is not None) else None
         kp = self._filter_best_person(kp, results)
         if kp is not None and results is not None:
@@ -448,6 +471,10 @@ class DetectionJob:
                 "resolution": f"{self.width}x{self.height}",
                 "fps": round(self.fps, 2),
                 "total_frames": self.total_frames,
+            },
+            "engine": {
+                "device": self.device,
+                "half": self.half,
             },
             "train_events": train_events,
             "stops": stops,

@@ -46,6 +46,8 @@ const PARAMS = [
   { key: "min_arm_len", label: "最小手臂长度", min: 10, max: 100, step: 1, unit: "px" },
   { key: "train_mad_threshold", label: "列车检测阈值", min: 5, max: 60, step: 1, unit: "" },
   { key: "idle_jump_seconds", label: "跳跃扫描间隔", min: 0, max: 30, step: 1, unit: "s" },
+  { key: "device", label: "推理设备", type: "select", options: [["auto", "自动（MPS / GPU / CPU）"], ["mps", "MPS（Apple Silicon）"], ["cpu", "CPU"], ["cuda:0", "CUDA"]] },
+  { key: "half", label: "FP16 半精度（MPS/CUDA）", type: "checkbox" },
 ];
 
 const state = {
@@ -60,6 +62,7 @@ const state = {
   result: null,
   pollTimer: null,
   mode: "play",
+  running: false,
 };
 
 function fillLineSelect(sel, onchange) {
@@ -109,7 +112,7 @@ function onDetectLine() {
   state.detectStation = null;
   fillStationSelect($("#detectStation"), state.detectLine, true);
   setBadge($("#detectAnnotationBadge"), "", "标注状态: —");
-  $("#btnStartDetect").disabled = true;
+  updateStartButton();
   updateStatusBar();
 }
 
@@ -119,8 +122,25 @@ function onDetectStation() {
   const annotated = opt && opt.dataset.annotated === "1";
   setBadge($("#detectAnnotationBadge"), annotated ? "ok" : "warn",
     annotated ? "标注状态: 已标注" : "标注状态: 未标注");
-  $("#btnStartDetect").disabled = !annotated || !state.video || state.mode !== "detect";
+  updateStartButton();
   updateStatusBar();
+}
+
+function updateStartButton() {
+  const btn = $("#btnStartDetect");
+  const hint = $("#detectHint");
+  if (state.running) {
+    btn.disabled = true;
+    hint.textContent = "检测进行中…";
+    return;
+  }
+  btn.disabled = false;
+  const missing = [];
+  if (!state.video) missing.push("加载视频");
+  if (!state.detectLine) missing.push("选择线路");
+  if (!state.detectStation) missing.push("选择站点");
+  if (state.mode !== "detect") missing.push("将运行模式切换为「开启检测」");
+  hint.textContent = missing.length ? `提示：请先${missing.join("、")}` : "准备就绪";
 }
 
 function onAnnoLine() {
@@ -174,15 +194,22 @@ async function loadAnnotationForStation() {
 async function loadParams() {
   const res = await api("/api/params/get");
   state.params = res.params || {};
+  renderParams();
+}
+
+async function loadModelStatus() {
+  const m = await api("/api/model/status");
   const modelBadge = $("#modelBadge");
-  if (res.model_available) {
-    modelBadge.textContent = "模型: 已就绪";
-    modelBadge.style.color = "#4ade80";
-  } else {
+  if (!m.available) {
     modelBadge.textContent = "模型: 未找到 yolo26x-pose.pt";
     modelBadge.style.color = "#f87171";
+    toast("未找到模型文件 yolo26x-pose.pt，请将其放入 models/ 目录后再进行检测", 5000);
+    return;
   }
-  renderParams();
+  const devNames = { mps: "MPS（Apple Silicon）", cpu: "CPU", cuda: "CUDA" };
+  const devName = devNames[m.device] || m.device;
+  modelBadge.textContent = `模型: 已就绪 · ${devName}${m.half_supported ? " · FP16" : ""}`;
+  modelBadge.style.color = "#4ade80";
 }
 
 function renderParams() {
@@ -192,25 +219,46 @@ function renderParams() {
     const val = state.params[p.key] != null ? state.params[p.key] : p.default;
     const item = document.createElement("div");
     item.className = "param-item";
-    item.innerHTML = `
-      <div class="param-label">${p.label}</div>
-      <div class="param-row">
-        <input type="range" min="${p.min}" max="${p.max}" step="${p.step}" value="${val}" data-key="${p.key}" />
-        <input type="number" min="${p.min}" max="${p.max}" step="${p.step}" value="${val}" data-key="${p.key}" />
-      </div>`;
-    const range = item.querySelector("input[type=range]");
-    const num = item.querySelector("input[type=number]");
-    range.addEventListener("input", () => { num.value = range.value; });
-    num.addEventListener("input", () => { range.value = num.value; });
-    range.addEventListener("change", saveParam);
-    num.addEventListener("change", saveParam);
+    if (p.type === "select") {
+      item.innerHTML = `
+        <div class="param-label">${p.label}</div>
+        <div class="param-row">
+          <select data-key="${p.key}" style="flex:1">${p.options.map(([v, t]) =>
+            `<option value="${v}"${String(val) === v ? " selected" : ""}>${t}</option>`).join("")}</select>
+        </div>`;
+      item.querySelector("select").addEventListener("change", saveParam);
+    } else if (p.type === "checkbox") {
+      item.innerHTML = `
+        <div class="param-label">${p.label}</div>
+        <div class="param-row">
+          <input type="checkbox" data-key="${p.key}"${val ? " checked" : ""} />
+        </div>`;
+      item.querySelector("input").addEventListener("change", saveParam);
+    } else {
+      item.innerHTML = `
+        <div class="param-label">${p.label}</div>
+        <div class="param-row">
+          <input type="range" min="${p.min}" max="${p.max}" step="${p.step}" value="${val}" data-key="${p.key}" />
+          <input type="number" min="${p.min}" max="${p.max}" step="${p.step}" value="${val}" data-key="${p.key}" />
+        </div>`;
+      const range = item.querySelector("input[type=range]");
+      const num = item.querySelector("input[type=number]");
+      range.addEventListener("input", () => { num.value = range.value; });
+      num.addEventListener("input", () => { range.value = num.value; });
+      range.addEventListener("change", saveParam);
+      num.addEventListener("change", saveParam);
+    }
     grid.appendChild(item);
   });
 }
 
 async function saveParam(e) {
-  const key = e.target.dataset.key;
-  const val = parseFloat(e.target.value);
+  const el = e.target;
+  const key = el.dataset.key;
+  let val;
+  if (el.type === "checkbox") val = el.checked;
+  else if (el.type === "number" || el.type === "range") val = parseFloat(el.value);
+  else val = el.value;
   state.params[key] = val;
   try {
     await api("/api/params/set", {
@@ -246,19 +294,19 @@ function onVideoLoaded(video) {
   const v = $("#videoPlayer");
   v.src = `/api/video/stream?t=${Date.now()}`;
   v.load();
-  $("#btnStartDetect").disabled = !(state.detectStation && state.mode === "detect");
+  updateStartButton();
 }
 
 function setDetectMode(mode) {
   state.mode = mode;
-  $("#btnStartDetect").disabled = !(state.video && state.detectStation && mode === "detect");
+  updateStartButton();
 }
 
 async function startDetect() {
-  if (!state.video || !state.detectLine || !state.detectStation) {
-    toast("请先选择线路、站点并加载视频");
-    return;
-  }
+  if (!state.detectLine) { toast("请先选择线路"); return; }
+  if (!state.detectStation) { toast("请先选择站点"); return; }
+  if (!state.video) { toast("请先加载视频文件（选择视频文件或使用服务器本地路径）"); return; }
+  if (state.mode !== "detect") { toast('请将运行模式切换为「开启检测」'); return; }
   const params = {};
   PARAMS.forEach((p) => { params[p.key] = state.params[p.key]; });
   try {
@@ -273,11 +321,12 @@ async function startDetect() {
     });
     state.taskId = res.task_id;
     state.result = null;
-    $("#btnStartDetect").disabled = true;
+    state.running = true;
     $("#btnStopDetect").disabled = false;
     setBadge($("#detectStatusBadge"), "running", "检测状态: 检测中");
     $("#trainEventsPanel").hidden = true;
     $("#outputPaths").hidden = true;
+    updateStartButton();
     updateStatusBar();
     startPolling();
   } catch (e) {
@@ -307,20 +356,23 @@ function startPolling() {
         `${state.detectLine}/${state.detectStation} | 检测中 ${pct}% | 帧 ${s.current_frame}/${s.total_frames} | FPS ${s.process_fps}`;
     } else if (s.status === "done") {
       clearInterval(state.pollTimer);
+      state.running = false;
       state.result = s.result;
       onDetectDone(s.result);
     } else if (s.status === "error") {
       clearInterval(state.pollTimer);
+      state.running = false;
       setBadge($("#detectStatusBadge"), "error", "检测状态: 失败");
       toast("检测失败: " + (s.error || "未知错误"));
       $("#btnStopDetect").disabled = true;
-      $("#btnStartDetect").disabled = false;
+      updateStartButton();
       updateStatusBar();
     } else if (s.status === "stopped") {
       clearInterval(state.pollTimer);
+      state.running = false;
       setBadge($("#detectStatusBadge"), "", "检测状态: 已停止");
       $("#btnStopDetect").disabled = true;
-      $("#btnStartDetect").disabled = false;
+      updateStartButton();
       updateStatusBar();
     }
   }, 800);
@@ -329,7 +381,6 @@ function startPolling() {
 function onDetectDone(result) {
   setBadge($("#detectStatusBadge"), "ok", "检测状态: 检测完成");
   $("#btnStopDetect").disabled = true;
-  $("#btnStartDetect").disabled = false;
   $("#btnDownloadVideo").disabled = false;
   $("#btnDownloadReport").disabled = false;
   $("#outputPaths").hidden = false;
@@ -337,6 +388,7 @@ function onDetectDone(result) {
   $("#outputReportPath").textContent = "报告: " + result.output.csv_report;
   renderTrainEvents(result.train_events || []);
   renderResultSummary(result);
+  updateStartButton();
   updateStatusBar();
   toast("检测完成");
 }
@@ -981,6 +1033,7 @@ async function saveAnnotation() {
     fillStationSelect($("#annoStation"), state.annoLine, false);
     $("#annoStation").value = state.annoStation;
     fillStationSelect($("#detectStation"), state.detectLine || state.annoLine, true);
+    updateStartButton();
   } catch (e) {
     toast(e.message);
   }
@@ -1077,6 +1130,7 @@ async function extractFrame() {
 
 function initDetection() {
   $("#btnLoadVideo").onclick = () => $("#videoFileInput").click();
+  $("#detectStation").addEventListener("change", onDetectStation);
   $("#videoFileInput").onchange = (e) => { if (e.target.files[0]) loadVideoFile(e.target.files[0]); e.target.value = ""; };
   $("#btnLoadPath").onclick = async () => {
     const p = await promptModal("服务器本地路径", `<input id="modalInput" type="text" placeholder="如 /Volumes/share/video.mp4 或 \\\\server\\share\\a.mp4" style="width:100%;padding:8px" />`);
@@ -1111,6 +1165,7 @@ function highlightCurrentEvent() {
 }
 
 function initAnnoButtons() {
+  $("#annoStation").addEventListener("change", onAnnoStation);
   $("#btnUndo").onclick = undo;
   $("#btnRedo").onclick = redo;
   $("#btnLoadBg").onclick = () => { const inp = $("#annoFileInput"); inp.accept = "image/*"; inp.onchange = (e) => { if (e.target.files[0]) loadBackgroundFile(e.target.files[0]); e.target.value = ""; }; inp.click(); };
@@ -1138,10 +1193,8 @@ async function boot() {
   initAnnoButtons();
   await loadStations();
   await loadParams();
-  const model = await api("/api/model/status");
-  if (!model.available) {
-    toast("未找到模型文件 yolo26x-pose.pt，请将其放入 models/ 目录后再进行检测", 5000);
-  }
+  await loadModelStatus();
+  updateStartButton();
 }
 
 boot();
