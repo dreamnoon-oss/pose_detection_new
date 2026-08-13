@@ -250,7 +250,7 @@ class VideoPlayer:
         if (self.frame_skip <= 0 or cur_frame % (self.frame_skip + 1) == 0
                 or self._last_results is None):
             results = self.model(frame, verbose=False, conf=self.model_conf,
-                                 imgsz=self.imgsz, half=self.half)
+                                 imgsz=self.imgsz, quantize=16 if self.half else None)
             self._last_results = results
         else:
             results = self._last_results
@@ -512,7 +512,7 @@ class VideoPlayer:
                 self._jump_scan_active = self.idle_jump_seconds > 0
                 self._confirm_low_count = 0
             results = self.model(frame, verbose=False, conf=self.model_conf,
-                                 imgsz=self.imgsz, half=self.half)
+                                 imgsz=self.imgsz, quantize=16 if self.half else None)
             kp = results[0].keypoints if (results and results[0].keypoints is not None) else None
             kp = self._filter_best_person(kp, results)
             if kp is not None and results is not None:
