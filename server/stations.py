@@ -10,6 +10,7 @@ legacy ``regions_{key}.json`` naming used by the existing seven stations).
 
 import os
 import csv
+import json
 
 from src.config import DATA_DIR
 
@@ -278,21 +279,63 @@ def get_lines():
 
 
 def get_stations(line):
-    """Return station entries for a line: ``[{name, key, annotated, status}]``."""
+    """Return station entries for a line.
+
+    Each entry: ``{name, key, annotated, configured, status, missing}`` where
+    status is ``annotated`` / ``incomplete`` / ``unannotated`` and *missing*
+    lists the incomplete required fields.
+    """
     entries = []
     for name in _STATIONS.get(line, []):
         key = station_key(line, name)
-        annotated = annotation_file_exists(line, name)
+        status, missing = annotation_completeness(line, name)
+        annotated = status != "unannotated"
         configured = key in STATION_CONFIGS
-        status = "annotated" if annotated else "unannotated"
         entries.append({
             "name": name,
             "key": key,
             "annotated": annotated,
             "configured": configured,
             "status": status,
+            "missing": missing,
         })
     return entries
+
+
+REQUIRED_ANNOTATION_FIELDS = ["regions", "lines", "track_roi", "background"]
+
+
+def annotation_completeness(line, name):
+    """Check a station's annotation JSON for required fields.
+
+    Returns:
+        ``(status, missing)`` — status is ``annotated`` / ``incomplete`` /
+        ``unannotated``; *missing* lists human-readable missing items.
+    """
+    path = resolve_annotation_path(line, name)
+    if not os.path.exists(path):
+        return "unannotated", []
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return "incomplete", ["JSON 解析失败"]
+
+    missing = []
+    if not data.get("regions"):
+        missing.append("矩形区域 regions")
+    if not data.get("lines"):
+        missing.append("参考线 lines")
+    if not data.get("track_roi"):
+        missing.append("轨道ROI track_roi")
+    bg = data.get("background") or {}
+    if not bg.get("image"):
+        missing.append("背景图 background")
+    elif not os.path.exists(os.path.join(os.path.dirname(path), bg["image"])):
+        missing.append("背景图片文件缺失")
+
+    status = "annotated" if not missing else "incomplete"
+    return status, missing
 
 
 def annotation_file_exists(line, name):

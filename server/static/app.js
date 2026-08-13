@@ -83,14 +83,17 @@ function fillStationSelect(sel, lineName, annotatedOnly) {
   ln.stations.forEach((s) => {
     const o = document.createElement("option");
     o.value = s.name;
+    const statusLabel = s.status === "annotated" ? "已标注" :
+      s.status === "incomplete" ? "标注不完整" : "未标注";
     if (annotatedOnly && !s.annotated) {
       o.disabled = true;
       o.textContent = `${s.name}（未标注）`;
     } else {
-      o.textContent = s.name + (s.annotated ? "（已标注）" : "");
+      o.textContent = s.name + (s.annotated ? `（${statusLabel}）` : "");
     }
     o.dataset.key = s.key;
     o.dataset.annotated = s.annotated ? "1" : "0";
+    o.dataset.status = s.status || "";
     sel.appendChild(o);
   });
 }
@@ -119,9 +122,10 @@ function onDetectLine() {
 function onDetectStation() {
   state.detectStation = $("#detectStation").value;
   const opt = $("#detectStation").selectedOptions[0];
-  const annotated = opt && opt.dataset.annotated === "1";
-  setBadge($("#detectAnnotationBadge"), annotated ? "ok" : "warn",
-    annotated ? "标注状态: 已标注" : "标注状态: 未标注");
+  const status = opt && opt.dataset.status;
+  if (status === "annotated") setBadge($("#detectAnnotationBadge"), "ok", "标注状态: 已标注");
+  else if (status === "incomplete") setBadge($("#detectAnnotationBadge"), "warn", "标注状态: 标注不完整");
+  else setBadge($("#detectAnnotationBadge"), "warn", "标注状态: 未标注");
   updateStartButton();
   updateStatusBar();
 }
@@ -1180,9 +1184,11 @@ function initAnnoButtons() {
 }
 
 function switchPage(name) {
-  $$(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.page === name));
-  $$(".page").forEach((p) => p.classList.toggle("active", p.id === `page-${name}`));
-  if (name === "annotate") resizeCanvas();
+  const page = ["detect", "annotate", "manage"].includes(name) ? name : "detect";
+  $$(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.page === page));
+  $$(".page").forEach((p) => p.classList.toggle("active", p.id === `page-${page}`));
+  if (page === "annotate") resizeCanvas();
+  if (page === "manage") loadStationManagement();
 }
 
 function initNav() {
@@ -1190,11 +1196,100 @@ function initNav() {
     location.hash = "/" + b.dataset.page;
   }));
   window.addEventListener("hashchange", () => {
-    const name = location.hash.replace(/^#\//, "");
-    switchPage(name === "annotate" ? "annotate" : "detect");
+    switchPage(location.hash.replace(/^#\//, ""));
   });
-  const initial = location.hash.replace(/^#\//, "");
-  switchPage(initial === "annotate" ? "annotate" : "detect");
+  switchPage(location.hash.replace(/^#\//, ""));
+}
+
+const stationMgmt = { data: null, filter: "" };
+
+function initManage() {
+  $("#manageLineFilter").addEventListener("change", (e) => {
+    stationMgmt.filter = e.target.value;
+    if (stationMgmt.data) renderMgmtTable(stationMgmt.data);
+  });
+  $("#btnBatchImport").onclick = () => $("#batchFileInput").click();
+  $("#batchFileInput").onchange = async (e) => {
+    const files = Array.from(e.target.files);
+    if (!files.length) return;
+    const fd = new FormData();
+    files.forEach((f) => fd.append("files", f));
+    try {
+      const res = await api("/api/annotation/batch_import", { method: "POST", body: fd });
+      const failCount = (res.errors || []).length;
+      toast(`批量导入完成：成功 ${res.imported} 个文件${failCount ? `，失败 ${failCount} 个` : ""}`);
+      if (failCount) res.errors.forEach((msg) => console.warn("导入失败:", msg));
+      await loadStations();
+      await loadStationManagement();
+    } catch (err) {
+      toast(err.message);
+    }
+    e.target.value = "";
+  };
+}
+
+async function loadStationManagement() {
+  try {
+    const res = await api("/api/stations/annotation_status");
+    stationMgmt.data = res;
+    renderMgmtStats(res);
+    renderMgmtTable(res);
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+function renderMgmtStats(res) {
+  const wrap = $("#mgmtStats");
+  wrap.innerHTML = "";
+  (res.per_line || []).forEach((p) => {
+    const pct = p.total ? Math.round((p.annotated / p.total) * 100) : 0;
+    const card = document.createElement("div");
+    card.className = "stat-card";
+    card.innerHTML = `
+      <div class="stat-line-name">${p.line}</div>
+      <div class="stat-num">${p.annotated}<span> / ${p.total} 站</span></div>
+      <div class="stat-bar"><div class="stat-fill" style="width:${pct}%"></div></div>
+      <div class="stat-sub">完成 ${pct}% · 不完整 ${p.incomplete} · 未标注 ${p.unannotated}</div>`;
+    wrap.appendChild(card);
+  });
+  const total = res.total || 0;
+  const un = total - (res.annotated || 0) - (res.incomplete || 0);
+  $("#manageStatusBar").textContent =
+    `共 ${total} 站 | 已标注 ${res.annotated} | 标注不完整 ${res.incomplete} | 未标注 ${un} | 完成率 ${((res.completion || 0) * 100).toFixed(1)}%`;
+}
+
+function renderMgmtTable(res) {
+  const tbody = $("#stationTableBody");
+  tbody.innerHTML = "";
+  const statusMap = {
+    annotated: ["ok", "已标注"],
+    incomplete: ["warn", "标注不完整"],
+    unannotated: ["", "未标注"],
+  };
+  (res.detail || []).forEach((d) => {
+    if (stationMgmt.filter && d.line !== stationMgmt.filter) return;
+    const [cls, label] = statusMap[d.status] || ["", d.status];
+    const missing = d.missing && d.missing.length ? d.missing.join("、") : "—";
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${d.line}</td>
+      <td>${d.station}</td>
+      <td class="mono">${d.key}</td>
+      <td><span class="badge ${cls}">${label}</span></td>
+      <td class="sub-text">${missing}</td>
+      <td><button class="btn small" data-line="${d.line}" data-station="${d.station}">去标注</button></td>`;
+    tr.querySelector("button").addEventListener("click", () => gotoAnnotate(d.line, d.station));
+    tbody.appendChild(tr);
+  });
+}
+
+function gotoAnnotate(line, station) {
+  $("#annoLine").value = line;
+  onAnnoLine();
+  $("#annoStation").value = station;
+  onAnnoStation();
+  location.hash = "/annotate";
 }
 
 async function boot() {
@@ -1202,6 +1297,7 @@ async function boot() {
   initDetection();
   initAnno();
   initAnnoButtons();
+  initManage();
   await loadStations();
   await loadParams();
   await loadModelStatus();

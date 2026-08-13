@@ -16,6 +16,7 @@
     <nav class="nav">
       <a class="nav-btn" href="#/detect" data-page="detect">检测分析</a>
       <a class="nav-btn" href="#/annotate" data-page="annotate">标注工具</a>
+      <a class="nav-btn" href="#/manage" data-page="manage">站点管理</a>
     </nav>
     <div class="model-badge" id="modelBadge">模型: 检测中…</div>
   </header>
@@ -197,6 +198,54 @@
       </div>
 
       <div class="statusbar" id="annoStatusBar">未加载站点 | 区域: 0 | 线段: 0 | 轨道: —</div>
+    </section>
+
+    <!-- ===================== 页面三：站点管理 ===================== -->
+    <section id="page-manage" class="page">
+      <div class="page-head">
+        <h1>站点管理</h1>
+        <p>统一管理 3/4/7/15 号线站点的标注数据：标注进度追踪、完整性检查、批量导入标注文件。</p>
+      </div>
+
+      <div class="grid-4" id="mgmtStats"></div>
+
+      <div class="card">
+        <div class="card-head">
+          <span>站点标注状态总览</span>
+          <span class="card-head-extra">
+            <button id="btnBatchImport" class="btn">批量导入标注</button>
+            <input type="file" id="batchFileInput" multiple accept=".json,.png,.jpg,.jpeg" hidden />
+          </span>
+        </div>
+        <div class="card-body">
+          <div class="form-row" style="margin-bottom:12px">
+            <label>按线路筛选
+              <select id="manageLineFilter">
+                <option value="">全部线路</option>
+                <option>3号线</option>
+                <option>4号线</option>
+                <option>7号线</option>
+                <option>15号线</option>
+              </select>
+            </label>
+          </div>
+          <table class="station-table">
+            <thead>
+              <tr>
+                <th>线路</th>
+                <th>站点</th>
+                <th>拼音标识</th>
+                <th>标注状态</th>
+                <th>缺失项</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="stationTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="statusbar" id="manageStatusBar">加载中…</div>
     </section>
   </main>
 

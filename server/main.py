@@ -9,13 +9,14 @@ delegated to :mod:`server.engine` (headless reuse of the existing src/ modules).
 import base64
 import json
 import os
+import re
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from src.config import OUTPUT_DIR, DEFAULT_MODEL
+from src.config import DATA_DIR, OUTPUT_DIR, DEFAULT_MODEL
 
 from . import stations as st
 from .engine import TASK_MANAGER
@@ -123,26 +124,41 @@ def annotation_status(line: str | None = None):
     lines = st.get_lines()
     if line is not None:
         lines = [ln for ln in lines if ln["name"] == line]
-    total = 0
-    annotated = 0
+    total = annotated = incomplete = 0
     detail = []
+    per_line = []
     for ln in lines:
         entries = st.get_stations(ln["name"])
+        l_ann = l_inc = 0
         for e in entries:
             total += 1
-            if e["annotated"]:
+            if e["status"] == "annotated":
                 annotated += 1
+                l_ann += 1
+            elif e["status"] == "incomplete":
+                incomplete += 1
+                l_inc += 1
             detail.append({
                 "line": ln["name"],
                 "station": e["name"],
                 "key": e["key"],
                 "status": e["status"],
+                "missing": e["missing"],
             })
+        per_line.append({
+            "line": ln["name"],
+            "total": len(entries),
+            "annotated": l_ann,
+            "incomplete": l_inc,
+            "unannotated": len(entries) - l_ann - l_inc,
+        })
     return {
         "total": total,
         "annotated": annotated,
+        "incomplete": incomplete,
         "completion": round(annotated / total, 3) if total else 0.0,
         "lines": lines,
+        "per_line": per_line,
         "detail": detail,
     }
 
@@ -449,6 +465,60 @@ def annotation_stations(line: str | None = None):
                 out.append({"line": ln["name"], "station": e["name"],
                             "key": e["key"], "status": e["status"]})
     return {"stations": out}
+
+
+@app.post("/api/annotation/batch_import")
+async def annotation_batch_import(request: Request):
+    """Batch import annotation JSONs (+ background images) into data/.
+
+    JSON files must carry ``line``/``station``/``station_key`` binding fields,
+    or be named ``regions_{线路号}_{站点拼音}.json`` so the binding can be
+    derived from the filename. PNG/JPG files are copied into data/ as-is.
+    """
+    form = await request.form()
+    files = form.getlist("files")
+    if not files:
+        raise HTTPException(400, "未收到文件")
+
+    imported = 0
+    errors = []
+    for f in files:
+        fname = os.path.basename(f.filename or "")
+        content = await f.read()
+        ext = os.path.splitext(fname)[1].lower()
+        if ext == ".json":
+            try:
+                data = json.loads(content.decode("utf-8"))
+            except Exception as exc:
+                errors.append(f"{fname}: JSON 解析失败 ({exc})")
+                continue
+            line = data.get("line")
+            key = data.get("station_key")
+            if not key and data.get("station") and line:
+                key = st.station_key(line, data["station"])
+            if not key or not line:
+                m = re.match(r"regions_(\d+)_(.+)\.json", fname)
+                if m:
+                    line = line or f"{m.group(1)}号线"
+                    key = key or m.group(2)
+            if not line or not key:
+                errors.append(f"{fname}: 缺少 line/station_key 绑定字段，且文件名不符合 regions_线_拼音.json 规则")
+                continue
+            data["line"] = line
+            data["station_key"] = key
+            data.setdefault("station", key)
+            path = os.path.join(DATA_DIR, f"regions_{st.line_number(line)}_{key}.json")
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, indent=2, ensure_ascii=False)
+            imported += 1
+        elif ext in (".png", ".jpg", ".jpeg"):
+            with open(os.path.join(DATA_DIR, fname), "wb") as fh:
+                fh.write(content)
+            imported += 1
+        else:
+            errors.append(f"{fname}: 不支持的文件类型")
+
+    return {"ok": True, "imported": imported, "errors": errors}
 
 
 @app.get("/api/model/status")
