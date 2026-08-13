@@ -266,6 +266,39 @@ python scripts/video_anonymize.py -i video.mp4 -o output.mp4 --device cuda:0
 | `--no-face` | — | 跳过人脸检测，只做手动框选 |
 | `--no-fix-roi` | — | 跳过手动框选，只做人脸检测 |
 
+## Web 界面
+
+本地浏览器部署的 Web 应用（FastAPI + 原生前端），整合已有算法引擎，提供检测分析与可视化标注两个页面。
+
+### 启动
+
+```bash
+python run_web.py                # 默认 http://127.0.0.1:8000
+python run_web.py --port 9000    # 指定端口
+python run_web.py --reload       # 开发模式热重载
+```
+
+> 需先将 `yolo26x-pose.pt` 放入 `models/` 目录，检测功能才可用（前端顶部会提示模型是否就绪）。
+
+### 功能
+
+- **检测分析**：线路+站点级联选择（覆盖 3/4/7/15 号线 117 个站点）、视频加载（本地上传或服务器本地路径）、仅播放/开启检测两种模式、可折叠参数面板、列车到站事件列表（点击跳转播放）、检测视频与 CSV 报告下载、实时进度/帧数/FPS 状态栏。
+- **标注工具**：可视化画布绘制矩形区域 / 参考线 / 轨道 ROI、属性面板编辑、撤销重做、保存标注（自动按 `regions_{线路}_{站点拼音}.json` 命名并与站点绑定）、JSON 导入导出、背景图加载与视频帧提取。
+- **多站点管理**：内置全部站点拼音映射，自动识别已有标注（兼容旧版 `regions_{key}.json` 命名），标注进度统计。
+
+### 后端结构
+
+```
+run_web.py                # 入口（uvicorn）
+server/
+├── main.py               # FastAPI 应用 + REST API + 静态托管
+├── stations.py           # 线路/站点数据、拼音映射、标注解析、检测配置
+├── engine.py             # 无头检测引擎（复用 src/ 各模块，后台线程 + 进度上报）
+└── static/               # 前端（原生 HTML/CSS/JS，无外部依赖，纯本地运行）
+```
+
+后端复用 `src/` 下的全部检测模块（`ParallelDetector`、`TrainDetector`、`SequenceAnalyzer`、`visualization`、`reporter`），无头模式下不再依赖 OpenCV 窗口交互。
+
 ## 快速开始
 
 ### 环境要求
