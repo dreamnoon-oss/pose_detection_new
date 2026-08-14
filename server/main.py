@@ -9,7 +9,6 @@ delegated to :mod:`server.engine` (headless reuse of the existing src/ modules).
 import base64
 import json
 import os
-import re
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
@@ -467,58 +466,38 @@ def annotation_stations(line: str | None = None):
     return {"stations": out}
 
 
-@app.post("/api/annotation/batch_import")
-async def annotation_batch_import(request: Request):
-    """Batch import annotation JSONs (+ background images) into data/.
+@app.post("/api/annotation/delete")
+def annotation_delete(body: AnnotationLoadBody):
+    """Remove a station's annotation (JSON + background image).
 
-    JSON files must carry ``line``/``station``/``station_key`` binding fields,
-    or be named ``regions_{线路号}_{站点拼音}.json`` so the binding can be
-    derived from the filename. PNG/JPG files are copied into data/ as-is.
+    The station itself stays in the registry — it simply becomes 未标注.
     """
-    form = await request.form()
-    files = form.getlist("files")
-    if not files:
-        raise HTTPException(400, "未收到文件")
-
-    imported = 0
-    errors = []
-    for f in files:
-        fname = os.path.basename(f.filename or "")
-        content = await f.read()
-        ext = os.path.splitext(fname)[1].lower()
-        if ext == ".json":
-            try:
-                data = json.loads(content.decode("utf-8"))
-            except Exception as exc:
-                errors.append(f"{fname}: JSON 解析失败 ({exc})")
-                continue
-            line = data.get("line")
-            key = data.get("station_key")
-            if not key and data.get("station") and line:
-                key = st.station_key(line, data["station"])
-            if not key or not line:
-                m = re.match(r"regions_(\d+)_(.+)\.json", fname)
-                if m:
-                    line = line or f"{m.group(1)}号线"
-                    key = key or m.group(2)
-            if not line or not key:
-                errors.append(f"{fname}: 缺少 line/station_key 绑定字段，且文件名不符合 regions_线_拼音.json 规则")
-                continue
-            data["line"] = line
-            data["station_key"] = key
-            data.setdefault("station", key)
-            path = os.path.join(DATA_DIR, f"regions_{st.line_number(line)}_{key}.json")
-            with open(path, "w", encoding="utf-8") as fh:
-                json.dump(data, fh, indent=2, ensure_ascii=False)
-            imported += 1
-        elif ext in (".png", ".jpg", ".jpeg"):
-            with open(os.path.join(DATA_DIR, fname), "wb") as fh:
-                fh.write(content)
-            imported += 1
-        else:
-            errors.append(f"{fname}: 不支持的文件类型")
-
-    return {"ok": True, "imported": imported, "errors": errors}
+    key = st.station_key(body.line, body.station)
+    ln = st.line_number(body.line)
+    candidates = [
+        os.path.join(DATA_DIR, f"regions_{ln}_{key}.json"),
+        os.path.join(DATA_DIR, f"regions_{key}.json"),
+    ]
+    deleted = []
+    for p in candidates:
+        if not os.path.exists(p):
+            continue
+        try:
+            with open(p, encoding="utf-8") as f:
+                data = json.load(f)
+            bg = (data.get("background") or {}).get("image")
+            if bg:
+                bg_path = os.path.join(os.path.dirname(p), bg)
+                if os.path.exists(bg_path):
+                    os.remove(bg_path)
+                    deleted.append(os.path.basename(bg_path))
+        except Exception:
+            pass
+        os.remove(p)
+        deleted.append(os.path.basename(p))
+    if not deleted:
+        raise HTTPException(404, "该站点没有标注文件")
+    return {"ok": True, "deleted": deleted}
 
 
 @app.get("/api/model/status")

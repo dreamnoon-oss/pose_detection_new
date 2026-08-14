@@ -1201,31 +1201,17 @@ function initNav() {
   switchPage(location.hash.replace(/^#\//, ""));
 }
 
-const stationMgmt = { data: null, filter: "" };
+const stationMgmt = { data: null, filter: "", statusFilter: "" };
 
 function initManage() {
   $("#manageLineFilter").addEventListener("change", (e) => {
     stationMgmt.filter = e.target.value;
     if (stationMgmt.data) renderMgmtTable(stationMgmt.data);
   });
-  $("#btnBatchImport").onclick = () => $("#batchFileInput").click();
-  $("#batchFileInput").onchange = async (e) => {
-    const files = Array.from(e.target.files);
-    if (!files.length) return;
-    const fd = new FormData();
-    files.forEach((f) => fd.append("files", f));
-    try {
-      const res = await api("/api/annotation/batch_import", { method: "POST", body: fd });
-      const failCount = (res.errors || []).length;
-      toast(`批量导入完成：成功 ${res.imported} 个文件${failCount ? `，失败 ${failCount} 个` : ""}`);
-      if (failCount) res.errors.forEach((msg) => console.warn("导入失败:", msg));
-      await loadStations();
-      await loadStationManagement();
-    } catch (err) {
-      toast(err.message);
-    }
-    e.target.value = "";
-  };
+  $("#manageStatusFilter").addEventListener("change", (e) => {
+    stationMgmt.statusFilter = e.target.value;
+    if (stationMgmt.data) renderMgmtTable(stationMgmt.data);
+  });
 }
 
 async function loadStationManagement() {
@@ -1269,6 +1255,7 @@ function renderMgmtTable(res) {
   };
   (res.detail || []).forEach((d) => {
     if (stationMgmt.filter && d.line !== stationMgmt.filter) return;
+    if (stationMgmt.statusFilter && d.status !== stationMgmt.statusFilter) return;
     const [cls, label] = statusMap[d.status] || ["", d.status];
     const missing = d.missing && d.missing.length ? d.missing.join("、") : "—";
     const tr = document.createElement("tr");
@@ -1278,10 +1265,41 @@ function renderMgmtTable(res) {
       <td class="mono">${d.key}</td>
       <td><span class="badge ${cls}">${label}</span></td>
       <td class="sub-text">${missing}</td>
-      <td><button class="btn small" data-line="${d.line}" data-station="${d.station}">去标注</button></td>`;
-    tr.querySelector("button").addEventListener("click", () => gotoAnnotate(d.line, d.station));
+      <td>
+        <button class="btn small" data-line="${d.line}" data-station="${d.station}">去标注</button>
+        ${d.status !== "unannotated"
+          ? `<button class="btn small danger" data-line="${d.line}" data-station="${d.station}">删除标注</button>`
+          : ""}
+      </td>`;
+    tr.querySelectorAll("button").forEach((b) => {
+      b.addEventListener("click", () => {
+        if (b.textContent.includes("删除")) deleteAnnotation(d.line, d.station);
+        else gotoAnnotate(d.line, d.station);
+      });
+    });
     tbody.appendChild(tr);
   });
+}
+
+async function deleteAnnotation(line, station) {
+  const ok = await promptModal(
+    "删除标注",
+    `<p style="margin:0">确定删除「${line} / ${station}」的标注吗？</p>
+     <p class="sub-text" style="margin:8px 0 0">标注 JSON 与背景图将被移除，该站点变为<b>未标注</b>（站点本身保留）。此操作不可撤销。</p>`
+  );
+  if (ok !== true) return;
+  try {
+    const res = await api("/api/annotation/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ line, station }),
+    });
+    toast(`已删除标注：${res.deleted.join("、")}`);
+    await loadStations();
+    await loadStationManagement();
+  } catch (err) {
+    toast(err.message);
+  }
 }
 
 function gotoAnnotate(line, station) {

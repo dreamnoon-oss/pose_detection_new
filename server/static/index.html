@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="Cache-Control" content="no-store" />
   <title>地铁司机标准化作业行为智能分析系统</title>
-  <link rel="stylesheet" href="/static/style.css?v=3" />
+  <link rel="stylesheet" href="/static/style.css?v=5" />
 </head>
 <body>
   <header class="topbar">
@@ -204,7 +204,7 @@
     <section id="page-manage" class="page">
       <div class="page-head">
         <h1>站点管理</h1>
-        <p>统一管理 3/4/7/15 号线站点的标注数据：标注进度追踪、完整性检查、批量导入标注文件。</p>
+        <p>统一管理 3/4/7/15 号线站点的标注数据：标注进度追踪与标注完整性检查。</p>
       </div>
 
       <div class="grid-4" id="mgmtStats"></div>
@@ -212,10 +212,6 @@
       <div class="card">
         <div class="card-head">
           <span>站点标注状态总览</span>
-          <span class="card-head-extra">
-            <button id="btnBatchImport" class="btn">批量导入标注</button>
-            <input type="file" id="batchFileInput" multiple accept=".json,.png,.jpg,.jpeg" hidden />
-          </span>
         </div>
         <div class="card-body">
           <div class="form-row" style="margin-bottom:12px">
@@ -226,6 +222,14 @@
                 <option>4号线</option>
                 <option>7号线</option>
                 <option>15号线</option>
+              </select>
+            </label>
+            <label>按状态筛选
+              <select id="manageStatusFilter">
+                <option value="">全部状态</option>
+                <option value="annotated">已标注</option>
+                <option value="incomplete">标注不完整</option>
+                <option value="unannotated">未标注</option>
               </select>
             </label>
           </div>
@@ -262,6 +266,6 @@
 
   <div id="toast" class="toast" hidden></div>
 
-  <script src="/static/app.js?v=3"></script>
+  <script src="/static/app.js?v=5"></script>
 </body>
 </html>
