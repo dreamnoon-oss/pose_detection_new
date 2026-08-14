@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="Cache-Control" content="no-store" />
   <title>地铁司机标准化作业行为智能分析系统</title>
-  <link rel="stylesheet" href="/static/style.css?v=6" />
+  <link rel="stylesheet" href="/static/style.css?v=7" />
 </head>
 <body>
   <header class="topbar">
@@ -83,24 +83,26 @@
         </div>
       </div>
 
-      <div class="card">
-        <div class="card-head">视频播放</div>
-        <div class="card-body">
-          <div class="video-wrap">
-            <video id="videoPlayer" controls></video>
-          </div>
-          <div class="player-bar">
-            <span id="playerTime">00:00 / 00:00</span>
-            <span id="playerSourceLabel">源视频</span>
-            <label class="checkbox"><input type="checkbox" id="chkDetected" /> 播放检测结果视频</label>
+      <div class="video-layout">
+        <div class="card video-card">
+          <div class="card-head">视频播放</div>
+          <div class="card-body">
+            <div class="video-wrap">
+              <video id="videoPlayer" controls></video>
+            </div>
+            <div class="player-bar">
+              <span id="playerTime">00:00 / 00:00</span>
+              <span id="playerSourceLabel">源视频</span>
+              <label class="checkbox"><input type="checkbox" id="chkDetected" /> 播放检测结果视频</label>
+            </div>
           </div>
         </div>
-      </div>
 
-      <div class="card" id="trainEventsPanel" hidden>
-        <div class="card-head">列车到站事件</div>
-        <div class="card-body">
-          <ul class="event-list" id="trainEventList"></ul>
+        <div class="card events-card" id="trainEventsPanel" hidden>
+          <div class="card-head">列车到站事件</div>
+          <div class="card-body">
+            <ul class="event-list" id="trainEventList"></ul>
+          </div>
         </div>
       </div>
 
@@ -270,6 +272,6 @@
 
   <div id="toast" class="toast" hidden></div>
 
-  <script src="/static/app.js?v=6"></script>
+  <script src="/static/app.js?v=7"></script>
 </body>
 </html>
