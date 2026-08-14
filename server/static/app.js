@@ -496,7 +496,6 @@ function initAnno() {
   canvas.addEventListener("mousedown", annoMouseDown);
   canvas.addEventListener("mousemove", annoMouseMove);
   canvas.addEventListener("mouseup", annoMouseUp);
-  canvas.addEventListener("wheel", annoWheel, { passive: false });
   $$(".tool").forEach((b) => b.addEventListener("click", () => setTool(b.dataset.tool)));
   renderAnnoList();
   updateAnnoStatusBar();
@@ -663,21 +662,20 @@ function annoMouseUp(e) {
   renderAnno();
 }
 
-function annoWheel(e) {
-  e.preventDefault();
+function zoomCanvas(factor) {
   const c = $("#annoCanvas");
-  const r = c.getBoundingClientRect();
-  const mx = e.clientX - r.left;
-  const my = e.clientY - r.top;
-  const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+  const cx = c.width / 2;
+  const cy = c.height / 2;
   const oldScale = anno.view.scale;
   const newScale = Math.min(10, Math.max(0.05, oldScale * factor));
-  const imgX = (mx - anno.view.ox) / oldScale;
-  const imgY = (my - anno.view.oy) / oldScale;
+  if (newScale === oldScale) return;
+  const imgX = (cx - anno.view.ox) / oldScale;
+  const imgY = (cy - anno.view.oy) / oldScale;
   anno.view.scale = newScale;
-  anno.view.ox = mx - imgX * newScale;
-  anno.view.oy = my - imgY * newScale;
+  anno.view.ox = cx - imgX * newScale;
+  anno.view.oy = cy - imgY * newScale;
   renderAnno();
+  updateAnnoStatusBar();
 }
 
 function nextName(prefix, arr) {
@@ -919,6 +917,8 @@ function renderAnnoList() {
 function updateAnnoStatusBar() {
   $("#annoStatusBar").textContent =
     `${state.annoLine || "未选线路"}/${state.annoStation || "未选站点"} | 区域: ${anno.regions.length} | 线段: ${anno.lines.length} | 轨道: ${anno.trackRoi || "—"}`;
+  const zoomLabel = $("#zoomLabel");
+  if (zoomLabel) zoomLabel.textContent = `${Math.round(anno.view.scale * 100)}%`;
 }
 
 function reset() {
@@ -1173,6 +1173,8 @@ function highlightCurrentEvent() {
 
 function initAnnoButtons() {
   $("#annoStation").addEventListener("change", onAnnoStation);
+  $("#btnZoomIn").onclick = () => zoomCanvas(1.25);
+  $("#btnZoomOut").onclick = () => zoomCanvas(0.8);
   $("#btnUndo").onclick = undo;
   $("#btnRedo").onclick = redo;
   $("#btnLoadBg").onclick = () => { const inp = $("#annoFileInput"); inp.accept = "image/*"; inp.onchange = (e) => { if (e.target.files[0]) loadBackgroundFile(e.target.files[0]); e.target.value = ""; }; inp.click(); };

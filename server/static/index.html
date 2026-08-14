@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="Cache-Control" content="no-store" />
   <title>地铁司机标准化作业行为智能分析系统</title>
-  <link rel="stylesheet" href="/static/style.css?v=5" />
+  <link rel="stylesheet" href="/static/style.css?v=6" />
 </head>
 <body>
   <header class="topbar">
@@ -157,6 +157,10 @@
             <span class="sep"></span>
             <button class="tool" data-tool="pan">平移</button>
             <span class="sep"></span>
+            <button id="btnZoomIn" class="btn" title="放大画布">放大 +</button>
+            <button id="btnZoomOut" class="btn" title="缩小画布">缩小 −</button>
+            <span class="zoom-label" id="zoomLabel">100%</span>
+            <span class="sep"></span>
             <button id="btnUndo" class="btn">撤销</button>
             <button id="btnRedo" class="btn">重做</button>
           </div>
@@ -266,6 +270,6 @@
 
   <div id="toast" class="toast" hidden></div>
 
-  <script src="/static/app.js?v=5"></script>
+  <script src="/static/app.js?v=6"></script>
 </body>
 </html>
