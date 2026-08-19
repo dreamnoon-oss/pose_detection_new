@@ -63,6 +63,7 @@ const state = {
   pollTimer: null,
   mode: "play",
   running: false,
+  trainOnly: false,
 };
 
 function fillLineSelect(sel, onchange) {
@@ -321,6 +322,7 @@ async function startDetect() {
         line: state.detectLine,
         station: state.detectStation,
         params,
+        train_only: state.trainOnly,
       }),
     });
     state.taskId = res.task_id;
@@ -448,6 +450,12 @@ function ensurePlayableSource() {
 }
 
 function renderResultSummary(result) {
+  const bar = $("#detectStatusBar");
+  if (result.mode === "train_only") {
+    const stops = result.stops || [];
+    bar.textContent = `${state.detectLine}/${state.detectStation} | 仅列车检测完成 | 共 ${stops.length} 趟列车停靠`;
+    return;
+  }
   const stops = result.stops || [];
   if (!stops.length) return;
   const summary = stops.map((s) => {
@@ -455,7 +463,6 @@ function renderResultSummary(result) {
     const compliant = ev.compliant ? "符合规范" : "不符合规范";
     return `第${s.index}趟：检出 ${ev.found}/${ev.expected} 动作，顺序${ev.order_valid ? "正确" : "不正确"}，${compliant}`;
   }).join(" ｜ ");
-  const bar = $("#detectStatusBar");
   bar.textContent = `${state.detectLine}/${state.detectStation} | 检测完成 | ${summary}`;
 }
 
@@ -1144,6 +1151,13 @@ function initDetection() {
     if (p) loadVideoPath(p);
   };
   $$('input[name="mode"]').forEach((r) => r.addEventListener("change", () => setDetectMode(r.value)));
+  $("#btnTrainOnly").onclick = () => {
+    state.trainOnly = !state.trainOnly;
+    $("#btnTrainOnly").classList.toggle("toggle-on", state.trainOnly);
+    toast(state.trainOnly
+      ? "已开启：仅检测列车进出站（跳过动作识别）"
+      : "已关闭：恢复完整检测（动作识别 + 列车进出站）");
+  };
   $("#btnStartDetect").onclick = startDetect;
   $("#btnStopDetect").onclick = stopDetect;
   $("#btnDownloadVideo").onclick = () => { if (state.result) window.open("/api/download/video", "_blank"); };

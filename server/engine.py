@@ -7,6 +7,9 @@ detection job runs in a background thread and publishes progress into a shared
 ``JobState`` object polled by the API layer.
 """
 
+import csv
+import datetime
+import io
 import os
 import time
 import threading
@@ -170,6 +173,7 @@ class DetectionJob:
         self._train_events = []          # collected (frame, ts, type)
         self.device = resolve_device(params.get("device", "auto"))
         self.half = use_half(self.device, params.get("half", True))
+        self.train_only = bool(params.get("train_only", False))
 
     # ------------------------------------------------------------------
     # Public
@@ -190,19 +194,21 @@ class DetectionJob:
     # ------------------------------------------------------------------
 
     def _run(self):
-        if not os.path.exists(self.model_path):
-            raise FileNotFoundError(f"未找到模型文件: {self.model_path}（请将 yolo26x-pose.pt 放入 models/ 目录）")
         if not os.path.exists(self.video_path):
             raise FileNotFoundError(f"未找到视频文件: {self.video_path}")
 
-        self.state.update(message="加载模型…")
-        self.model = get_model(self.model_path, device=self.device, half=self.half)
+        if not self.train_only:
+            if not os.path.exists(self.model_path):
+                raise FileNotFoundError(f"未找到模型文件: {self.model_path}（请将 yolo26x-pose.pt 放入 models/ 目录）")
+            self.state.update(message="加载模型…")
+            self.model = get_model(self.model_path, device=self.device, half=self.half)
 
         regions, lines = load_annotations(self.annotations_file)
-        if not self.rules:
-            raise ValueError("该站点未配置检测规则")
-        if not regions and not lines:
-            raise ValueError("该站点缺少标注数据（regions/lines 为空），请先在标注工具中完成标注")
+        if not self.train_only:
+            if not self.rules:
+                raise ValueError("该站点未配置检测规则")
+            if not regions and not lines:
+                raise ValueError("该站点缺少标注数据（regions/lines 为空），请先在标注工具中完成标注")
 
         self.detector = ParallelDetector(
             self.rules, regions, lines,
@@ -216,7 +222,7 @@ class DetectionJob:
             low_threshold=self.params.get("conf_low_threshold", 0.3),
             mid_threshold=self.params.get("conf_mid_threshold", 0.6))
 
-        # Train detector (optional)
+        # Train detector (optional for full mode, required for train-only)
         bg_path, track_name = load_background_info(self.annotations_file)
         self._track_roi_name = track_name
         if self._track_roi_name is None:
@@ -231,6 +237,8 @@ class DetectionJob:
                     bg_path, roi, fps=1.0,
                     high_threshold=self.params.get("train_mad_threshold", 20))
                 self.detector.enabled = False
+        if self.train_only and self.train_detector is None:
+            raise ValueError("仅列车检测模式需要该站点配置背景图与轨道ROI，请先在标注工具中完成标注（含背景图）")
 
         self._open_video()
         idle_jump = self.params.get("idle_jump_seconds", 0)
@@ -249,7 +257,9 @@ class DetectionJob:
                 break
             cur_frame = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES))
 
-            if self.train_detector is not None and self.train_detector.state == "AWAY":
+            if self.train_only:
+                self._process_train_only_frame(frame, cur_frame, idle_jump)
+            elif self.train_detector is not None and self.train_detector.state == "AWAY":
                 if idle_jump > 0 and self._jump_scan_active:
                     self._process_jump_scan(frame, cur_frame, idle_jump)
                 else:
@@ -404,6 +414,33 @@ class DetectionJob:
         if target > cur_frame - 1:
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, target)
 
+    def _process_train_only_frame(self, frame, cur_frame, idle_jump):
+        """Train-only mode: MAD detection per frame, no YOLO/pose/action rules."""
+        td = self.train_detector
+        if idle_jump > 0 and self._jump_scan_active and td.state == "AWAY":
+            self._process_jump_scan(frame, cur_frame, idle_jump)
+            return
+
+        prev_state = td.state
+        train_state, train_mad = td.update(frame, cur_frame)
+        if prev_state == "PRESENT" and train_state != "PRESENT":
+            self._settle_stop()
+            self._jump_scan_active = idle_jump > 0
+            self._confirm_low_count = 0
+        elif idle_jump > 0 and train_state == "AWAY":
+            if train_mad > td.high_threshold:
+                self._confirm_low_count = 0
+            else:
+                self._confirm_low_count += 1
+                if self._confirm_low_count >= int(self.fps * 2):
+                    self._jump_scan_active = True
+                    self._confirm_low_count = 0
+
+        viz.draw_train_status(frame, train_state, train_mad,
+                              hold_counter=td.hold_counter,
+                              hold_target=td.hold_target)
+        self.out.write(frame)
+
     # ------------------------------------------------------------------
     # Analysis / report
     # ------------------------------------------------------------------
@@ -425,21 +462,24 @@ class DetectionJob:
         self.out.release()
         self.out = None
 
-        script_name = "web"
-        generate_report(
-            self._report_path,
-            station_name=self.station_name,
-            script_name=script_name,
-            video_path=self.video_path,
-            output_video_path=self._output_video_path,
-            model_path=self.model_path,
-            imgsz=self.params.get("imgsz", 640),
-            model_conf=self.params.get("model_conf", 0.5),
-            stops=self._stop_blocks,
-            action_mapping=self.action_mapping,
-            detection_kwargs=self.detection_kwargs,
-            rules=self.rules,
-        )
+        if self.train_only:
+            self._write_train_only_report()
+        else:
+            script_name = "web"
+            generate_report(
+                self._report_path,
+                station_name=self.station_name,
+                script_name=script_name,
+                video_path=self.video_path,
+                output_video_path=self._output_video_path,
+                model_path=self.model_path,
+                imgsz=self.params.get("imgsz", 640),
+                model_conf=self.params.get("model_conf", 0.5),
+                stops=self._stop_blocks,
+                action_mapping=self.action_mapping,
+                detection_kwargs=self.detection_kwargs,
+                rules=self.rules,
+            )
 
         self.state.update(
             status="done",
@@ -447,6 +487,29 @@ class DetectionJob:
             message="检测完成",
             result=self._build_result(),
         )
+
+    def _write_train_only_report(self):
+        """CSV report for train-only mode: arrival/departure per stop."""
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(["列车进出站检测报告（仅列车检测）"])
+        w.writerow([])
+        w.writerow(["基本信息"])
+        w.writerow(["站点名称", self.station_name])
+        w.writerow(["检测日期", datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
+        w.writerow(["视频文件", self.video_path])
+        w.writerow(["列车趟数", str(len(self._stop_blocks))])
+        w.writerow([])
+        if not self._stop_blocks:
+            w.writerow(["检测结果", "未检测到列车进出站事件"])
+        for i, stop in enumerate(self._stop_blocks, 1):
+            w.writerow([f"====== 第{i}趟列车 ======"])
+            w.writerow(["列车到站", stop.get("arrive") or "—"])
+            w.writerow(["列车离站", stop.get("depart") or "—"])
+            w.writerow(["停靠时长", stop.get("duration") or "—"])
+            w.writerow([])
+        with open(self._report_path, "w", encoding="utf-8-sig", newline="") as f:
+            f.write(buf.getvalue())
 
     def _build_result(self):
         video_name = os.path.basename(self.video_path)
@@ -476,6 +539,7 @@ class DetectionJob:
                 "device": self.device,
                 "half": self.half,
             },
+            "mode": "train_only" if self.train_only else "full",
             "train_events": train_events,
             "stops": stops,
             "output": {
@@ -512,14 +576,16 @@ class DetectionJob:
                 if idx < len(self._stop_blocks):
                     ev = self._stop_blocks[idx].get("evaluation", {})
                     n_actions = ev.get("found", 0)
-                events.append({
+                dwell = {
                     "type": "dwell",
                     "label": "列车停靠",
                     "start": round(arr_ts, 1),
                     "end": round(dep_ts, 1),
                     "display": f"{_fmt_timestamp(arr_ts)} ~ {_fmt_timestamp(dep_ts)}",
-                    "actions_summary": f"检测到 {n_actions} 个标准动作",
-                })
+                }
+                if not self.train_only:
+                    dwell["actions_summary"] = f"检测到 {n_actions} 个标准动作"
+                events.append(dwell)
                 events.append({
                     "type": "departure",
                     "label": "列车离站",
@@ -531,9 +597,13 @@ class DetectionJob:
         return events
 
     def _settle_stop(self):
-        analyzer = SequenceAnalyzer(
-            self.detector.events, self.action_mapping, fps=self.fps)
-        analysis = analyzer.analyze()
+        if self.train_only:
+            analysis = {"actions": [], "order_valid": True,
+                        "all_found": True, "total_events": 0}
+        else:
+            analyzer = SequenceAnalyzer(
+                self.detector.events, self.action_mapping, fps=self.fps)
+            analysis = analyzer.analyze()
 
         arrive = depart = duration = None
         if self.train_detector is not None:

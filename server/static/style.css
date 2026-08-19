@@ -115,6 +115,8 @@ select:focus, input:focus { outline: 2px solid var(--accent); border-color: var(
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .btn:disabled:hover { border-color: var(--border); color: var(--text); }
 .btn.primary:disabled:hover { background: var(--accent); color: #fff; }
+.btn.toggle-on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.toggle-on:hover { background: var(--accent-dark); color: #fff; }
 
 .video-name { color: #334155; font-weight: 600; margin-top: 10px; word-break: break-all; }
 .radio { display: flex; align-items: center; gap: 4px; cursor: pointer; }

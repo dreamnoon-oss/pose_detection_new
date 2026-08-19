@@ -43,6 +43,7 @@ class DetectStartBody(BaseModel):
     station: str
     params: dict = {}
     video_path: str | None = None
+    train_only: bool = False
 
 
 class AnnotationSaveBody(BaseModel):
@@ -264,8 +265,9 @@ def video_stream():
 @app.post("/api/detect/start")
 def detect_start(body: DetectStartBody):
     global _current_video
+    train_only = bool(body.train_only)
     cfg = st.get_config(body.line, body.station)
-    if cfg is None:
+    if not train_only and cfg is None:
         raise HTTPException(400, "该站点尚未配置检测规则（需先完成标注与规则配置）")
 
     video_path = body.video_path or _current_video["path"]
@@ -280,14 +282,15 @@ def detect_start(body: DetectStartBody):
     params.update(_current_params)
     params.update(body.params or {})
     params["output_dir"] = OUTPUT_DIR
+    params["train_only"] = train_only
 
     job_id = TASK_MANAGER.start(
         model_path=DEFAULT_MODEL,
         video_path=video_path,
         annotations_file=annotations_file,
-        station_name=cfg["station_name"],
-        rules=cfg["rules"],
-        action_mapping=cfg["action_mapping"],
+        station_name=cfg["station_name"] if cfg else body.station,
+        rules=cfg["rules"] if cfg else [],
+        action_mapping=cfg["action_mapping"] if cfg else [],
         detection_kwargs=_detection_kwargs(params),
         params=params,
     )

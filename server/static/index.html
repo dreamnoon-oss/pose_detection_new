@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="Cache-Control" content="no-store" />
   <title>地铁司机标准化作业行为智能分析系统</title>
-  <link rel="stylesheet" href="/static/style.css?v=7" />
+  <link rel="stylesheet" href="/static/style.css?v=8" />
 </head>
 <body>
   <header class="topbar">
@@ -67,6 +67,7 @@
             <label class="radio"><input type="radio" name="mode" value="play" checked /> 仅播放</label>
             <label class="radio"><input type="radio" name="mode" value="detect" /> 开启检测</label>
             <div class="badge" id="detectStatusBadge">检测状态: 待检测</div>
+            <button id="btnTrainOnly" class="btn" title="只做列车进出站检测，跳过动作识别">仅检测列车进出站</button>
             <button id="btnStartDetect" class="btn primary">开始检测</button>
             <button id="btnStopDetect" class="btn danger" disabled>停止</button>
             <span class="sub-text" id="detectHint"></span>
@@ -272,6 +273,6 @@
 
   <div id="toast" class="toast" hidden></div>
 
-  <script src="/static/app.js?v=7"></script>
+  <script src="/static/app.js?v=8"></script>
 </body>
 </html>
