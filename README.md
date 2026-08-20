@@ -26,12 +26,13 @@ pose_detection/
 │   ├── detection.py       # 4 种检测算法（平行线/穿区域/指向/组合）
 │   ├── detector.py        # 并行检测器（多规则同时运行）
 │   ├── analyzer.py        # 时序分析器（事件→动作映射+顺序判定）
-│   ├── visualization.py   # 可视化（骨架、面板、中文渲染、调试射线）
-│   ├── annotation.py      # 标注工具（区域框选、参考线、背景保存）
+│   ├── visualization.py   # 可视化（骨架、面板、调试射线，纯 OpenCV 英文渲染）
+│   ├── annotation.py      # 标注工具（区域框选、参考线、背景、门线保存）
 │   ├── reporter.py        # CSV 检测报告生成
 │   ├── timefmt.py         # 时间格式化（秒 → HH:MM:SS）
 │   ├── train_detector.py  # 列车进出站检测（背景帧差法）
-│   └── player.py          # 交互式视频播放器
+│   ├── person_filter.py   # 门线选人纯函数（bbox 底边+髋部锚点）
+│   └── player.py          # 交互式视频播放器（含门线）
 ├── scripts/
 │   ├── run_shangtichang.py
 │   ├── run_baoshan.py
@@ -74,17 +75,17 @@ pose_detection/
 
 ## 已配置站点
 
-| 站点 | 脚本 | 检测类型 | 动作数 |
-|------|------|------|--------|
-| 上体场 | `run_shangtichang.py` | PAR + CROSS | 4 |
-| 宝山 | `run_baoshan.py` | P+L + POINT | 5 |
-| 静安寺 | `run_jingansi.py` | PAR + CROSS | 5 |
-| 塘桥 | `run_tangqiao.py` | PAR + CROSS | 4 |
-| 浦东大道 | `run_pudongdadao.py` | PAR + CROSS | 5 |
-| 临平 | `run_linping.py` | PAR + CROSS | 4 |
-| 龙华中 | `run_longhuazhong.py` | PAR + CROSS | 5 |
+| 站点 | 脚本 | 检测类型 | 动作数 | 动作 |
+|------|------|------|--------|------|
+| 上体场 | `run_shangtichang.py` | PAR + CROSS | 4 | Call / CloseDoor / CheckGap / CheckLight |
+| 宝山 | `run_baoshan.py` | P+L + POINT | 5 | PointFwd / CheckR2 / PointFwd / CheckR3 / CheckR4 |
+| 静安寺 | `run_jingansi.py` | PAR + CROSS | 5 | Call / CloseDoor / CheckGap / CheckLight / CheckSwitch |
+| 塘桥 | `run_tangqiao.py` | PAR + CROSS | 4 | Call / CloseDoor / CheckGap / CheckLight |
+| 浦东大道 | `run_pudongdadao.py` | PAR + CROSS | 5 | Call / CloseDoor / CheckGap / CheckLight / CheckSwitch |
+| 临平 | `run_linping.py` | PAR + CROSS | 4 | Call / CloseDoor / CheckGap / CheckLight |
+| 龙华中 | `run_longhuazhong.py` | PAR + CROSS | 5 | Call / CloseDoor / CheckGap / CheckLight / CheckSwitch |
 
-所有站点均已配置列车进出站检测（背景帧差法）。
+所有站点均已配置列车进出站检测（背景帧差法，track ROI + 背景图 + MAD 阈值 20）。
 
 ## 动作序列（以上体场为例）
 
@@ -226,6 +227,27 @@ pose_detection/
 
 长视频中多趟列车进出站时，每次确认离站即结算本趟（分析 + 报告分块 + 清空动作状态），各趟互不影响；视频结束时未离站的最后一趟也会结算。
 
+## 门线（司机侧人员过滤）— 全部站点启用
+
+**问题**：司机站在隔离门内，乘客全身可见、离镜头近，检测框置信度常高于被门遮挡的司机，导致选人逐帧在司机/乘客间跳变、误触发。
+
+**方案**：在门槛画一条"门线"，只保留**身体锚点在线内侧**的人员参与检测：
+
+- **锚点** = bbox 底边中点（脚部，永远存在）+ 髋部中点（11/12 兜底）；任一在司机侧即算线内。手臂故意排除——司机会越线做确认动作
+- **inside_side 旗标**：`signed_dist = cross(B−A, P−A)/|B−A| × inside_side > 0` 判定司机侧；画线时按当前帧司机脚锚点自动定，可 G 键翻转
+- **死区容差**：`GATE_MARGIN=12px`，脚压线不抖动；线内无人时沿用上一帧选择（滞回），否则丢弃全部人员
+- **kp/boxes 同索引**：选人逻辑一处计算，关键点与检测框用同一个 person 索引，避免画框和检测对不上
+
+**启用方式**：门线能力已并入 `VideoPlayer`（`src/player.py` + `src/person_filter.py` 纯函数），**所有站点脚本零改动**。只要站点 JSON 有 `gate_line` 键即自动启用；无该键时保持原置信度选人。
+
+JSON 顶层键：
+
+```json
+"gate_line": {"pts": [[x1,y1],[x2,y2]], "inside_side": 1}
+```
+
+**画线**（每站首个视频）：`python scripts/run_<站点>.py` → 暂停 → `G` 画/翻转门线（确认 `IN` 标记在司机侧）→ `S` 保存进该站 JSON → `X` 删除。重新运行该站脚本即启用门线过滤。
+
 ## 视频脱敏工具
 
 独立脚本 `scripts/video_anonymize.py`，基于 YOLO pose 模型自动检测人脸并打码（支持**马赛克 / 高斯模糊**两种方式），同时支持手动框选固定区域打码。
@@ -266,49 +288,6 @@ python scripts/video_anonymize.py -i video.mp4 -o output.mp4 --device cuda:0
 | `--no-face` | — | 跳过人脸检测，只做手动框选 |
 | `--no-fix-roi` | — | 跳过手动框选，只做人脸检测 |
 
-## Web 界面
-
-本地浏览器部署的 Web 应用（FastAPI + 原生前端），整合已有算法引擎，提供检测分析与可视化标注两个页面。
-
-### 启动
-
-```bash
-python run_web.py                # 默认 http://127.0.0.1:8000
-python run_web.py --port 9000    # 指定端口
-python run_web.py --reload       # 开发模式热重载
-```
-
-> 需先将 `yolo26x-pose.pt` 放入 `models/` 目录，检测功能才可用（前端顶部会提示模型是否就绪）。
-
-### Apple Silicon（M 系列芯片）加速
-
-推理设备自动选择：`CUDA → MPS → CPU`，M1 上自动启用 **MPS + FP16**：
-
-- 实测（M1 Pro，`yolo26x-pose.pt`，imgsz=640）：MPS 约 **103ms/帧（~10 FPS）**，CPU 约 367ms/帧，提速 **3.6 倍**
-- 参数面板可手动切换「推理设备」（自动 / MPS / CPU / CUDA）与 FP16 开关
-- `run_web.py` 启动时设置 `PYTORCH_ENABLE_MPS_FALLBACK=1`（不支持的算子自动回退 CPU）并为解码/前后处理开放全部 CPU 核心
-- 模型首次加载会做一次预热推理，首帧不卡顿
-- 如需进一步提速可降低 `imgsz`（640→512）或改用 `yolo26m-pose.pt`；后续可将模型导出 CoreML 获得更大提升
-
-### 功能
-
-- **检测分析**：线路+站点级联选择（覆盖 3/4/7/15 号线 117 个站点）、视频加载（本地上传或服务器本地路径）、仅播放/开启检测两种模式、可折叠参数面板、列车到站事件列表（点击跳转播放）、检测视频与 CSV 报告下载、实时进度/帧数/FPS 状态栏。
-- **标注工具**：可视化画布绘制矩形区域 / 参考线 / 轨道 ROI、属性面板编辑、撤销重做、保存标注（自动按 `regions_{线路}_{站点拼音}.json` 命名并与站点绑定）、JSON 导入导出、背景图加载与视频帧提取。
-- **多站点管理**：内置全部站点拼音映射，自动识别已有标注（兼容旧版 `regions_{key}.json` 命名），标注进度统计。
-
-### 后端结构
-
-```
-run_web.py                # 入口（uvicorn）
-server/
-├── main.py               # FastAPI 应用 + REST API + 静态托管
-├── stations.py           # 线路/站点数据、拼音映射、标注解析、检测配置
-├── engine.py             # 无头检测引擎（复用 src/ 各模块，后台线程 + 进度上报）
-└── static/               # 前端（原生 HTML/CSS/JS，无外部依赖，纯本地运行）
-```
-
-后端复用 `src/` 下的全部检测模块（`ParallelDetector`、`TrainDetector`、`SequenceAnalyzer`、`visualization`、`reporter`），无头模式下不再依赖 OpenCV 窗口交互。
-
 ## 快速开始
 
 ### 环境要求
@@ -338,6 +317,21 @@ python scripts/run_linping.py        # 临平
 python scripts/run_longhuazhong.py   # 龙华中
 ```
 
+## 开发约定 / 运行环境
+
+### 开发约定
+
+- **测试先行、单站验证**：新功能先写测试文件，用单个站点（如塘桥）验证，通过后再推广到所有站点
+- **实验功能隔离**：新功能优先放独立模块 / 独立脚本，正式站点脚本与 `VideoPlayer` 保持原样；验证通过后并入 `VideoPlayer` 并通过 JSON 配置启用（如 `gate_line` 键），站点脚本零改动
+- 与 AI 协作时不需要计划模式 / 任务清单，直接执行并口头说明步骤即可
+
+### 运行环境（实际开发机）
+
+- 运行环境：`D:\anaconda\envs\yolo\python.exe`（已装 ultralytics 8.4.75 与 numpy）
+- PATH 上的裸 `python` 是 Windows Store 存根（退出码 49），不可用；`D:\pycharm_pytorch\.venv` 未装 ultralytics
+- Windows 控制台 GBK 下中文 print 显示为乱码属显示问题，不影响测试结果
+- 用户主目录名含引号，命令行访问 `~` 需用 `os.path.expanduser`
+
 ## 操作说明
 
 | 按键 | 功能 |
@@ -354,3 +348,17 @@ python scripts/run_longhuazhong.py   # 龙华中
 | `D` | 删除最后区域 |
 | `K` | 删除最后参考线 |
 | `S` | 保存标注到 JSON |
+| `G` | 画/翻转门线（只检测线内侧人员，即司机侧） |
+| `X` | 删除门线 |
+
+## 变更历史
+
+- **2026-08-19**: **门线全站启用**：门线能力并入 `VideoPlayer`（`load_gate_info` + 门线选人 + G/X 键），任何站点 JSON 配 `gate_line` 键即启用（脚本零改动）；删除测试文件 `run_tangqiao_test.py` / `test_gate_tangqiao.py` / `src/gate_player.py`；塘桥 JSON 已含门线，其余站点可在各站脚本暂停后按 G 画线保存。详见上文"门线"章节。
+- **2026-08-17**: **门线（司机侧人员过滤）— 塘桥先行测试**：`GatePlayer` 子类 + `run_tangqiao_test.py`（G 画/翻转、X 删除、S 保存）；`person_filter.py` 纯函数（bbox 底边 + 髋部锚点、`inside_side` 旗标、12px 死区滞回、kp/boxes 同索引）；`VideoPlayer` 保持无门线，验证后正式站 JSON 配 `gate_line` 键启用。详见上文"门线"章节。
+- **2026-07-31**: **报告时间改时分秒** (`src/timefmt.py`) — CSV 中列车到/离站、停靠时长、动作检测时间统一为 `HH:MM:SS`（整数秒）；仅报告生效，控制台/视频仍为秒。
+- **2026-07-30**: **跳跃扫描全站推广**（`idle_jump_seconds=5`，7 站全部启用）：空闲段 5 秒一跳只算 MAD，MAD>20 → 回退 5 秒逐帧确认到站（时间戳精确），误报 2 秒自动恢复；**多趟车按趟结算**（确认离站结算本趟，结束结算末趟）；**单 CSV 多分块报告**；**真实帧号同步**（跳帧不影响时间戳）；删除 `run_tangqiao_fast.py`（已并入正式版）。
+- **2026-07-29**: **空闲快进**（`idle_fast_forward`）：列车 AWAY 时跳过 YOLO 推理，仅逐帧算 MAD；**自动退出**（`auto_exit`）播完自动生成报告并退出；**输出命名跟随输入视频**（`pose_output_<视频名>.mp4` / `report_<视频名>.csv`），各站脚本顶部新增 `OUT_DIR`；**脱敏工具高斯模糊模式**（默认 `blur`，`BLUR_STRENGTH` 自适应核大小）。
+- **2026-07-27**: **视频脱敏工具** (`scripts/video_anonymize.py`) — 人脸自动打码（pose 关键点定位 + IoU 跟踪平滑），支持手动框选、预览、帧范围、GPU、音频合并。
+- **2026-07-23**: **静安寺、龙华中新增道岔检测**（Act5 CheckSwitch，复用 `anti_parallel`，动作数 4→5）；删除浦东大道测试脚本（已并入正式版）。
+- **2026-07-22**: **同帧冲突仲裁**（`src/detector.py`）— 同帧多角度规则触发时按归一化分数保留最可信一个，被淘汰的不进冷却；`pass_region` 豁免；`data/` 加入 `.gitignore`。
+- **2026-07-16**: **置信度质量指标**（conf/hit_rate/margin）；**CSV 报告**（`src/reporter.py`）；输出目录重构为 `output/video` + `output/report`；**标准 5 动作模板**；**动态角度补偿**（`dynamic_angle`，40° + 弯曲角 × 0.6）；浦东大道/临平/龙华中激活；删除废弃 Streamlit `app.py` 与 v1 状态机 `state_machine.py`；修复 `save_annotations` 保留 background/track_roi。

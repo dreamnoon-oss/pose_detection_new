@@ -53,9 +53,38 @@ def load_background_info(json_path):
     return bg_path, track_roi
 
 
+def load_gate_info(json_path):
+    """Load gate line (driver-side person filter) from a JSON annotation file.
+
+    Returns:
+        ``(pts, inside_side)`` or ``(None, None)`` if not configured.
+        ``pts`` is ``[pt1, pt2]`` with tuple points; ``inside_side`` is +1/-1.
+    """
+    if not os.path.exists(json_path):
+        return None, None
+
+    with open(json_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    gate = data.get("gate_line")
+    if gate is None or not gate.get("pts"):
+        return None, None
+
+    pts = [tuple(p) for p in gate["pts"]]
+    inside_side = int(gate.get("inside_side", 1))
+    return pts, inside_side
+
+
+_UNSET = object()
+
+
 def save_annotations(json_path, regions, lines, video_path, frame_idx,
-                     width, height):
-    """Write regions and lines to a JSON file, preserving background/track_roi."""
+                     width, height, gate_line=_UNSET):
+    """Write regions and lines to a JSON file, preserving background/track_roi.
+
+    ``gate_line``: dict ``{"pts": [...], "inside_side": ...}`` to write the key,
+    ``None`` to remove it, or omit the argument to leave the existing key as-is.
+    """
     if os.path.exists(json_path):
         with open(json_path, "r", encoding="utf-8") as f:
             save_data = json.load(f)
@@ -70,6 +99,14 @@ def save_annotations(json_path, regions, lines, video_path, frame_idx,
         "regions": [{"name": r["name"], "xywh": list(r["xywh"])} for r in regions],
         "lines": [{"name": ln["name"], "pts": [list(p) for p in ln["pts"]]} for ln in lines],
     })
+    if gate_line is not _UNSET:
+        if gate_line is None:
+            save_data.pop("gate_line", None)
+        else:
+            save_data["gate_line"] = {
+                "pts": [list(p) for p in gate_line["pts"]],
+                "inside_side": int(gate_line["inside_side"]),
+            }
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(save_data, f, indent=2, ensure_ascii=False)
 

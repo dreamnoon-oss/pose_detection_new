@@ -19,10 +19,13 @@ import numpy as np
 
 from src import visualization as viz
 from src.analyzer import SequenceAnalyzer
-from src.annotation import load_annotations, load_background_info
+from src.annotation import (load_annotations, load_background_info,
+                            load_gate_info)
 from src.confidence_color import ConfidenceColorMapper
+from src.config import CONF_THRESHOLD, GATE_MARGIN
 from src.detector import ParallelDetector
 from src.device import resolve_device, tune_threads, use_half
+from src.person_filter import select_person_idx
 from src.reporter import generate_report
 from src.timefmt import format_hms
 from src.train_detector import TrainDetector
@@ -174,6 +177,10 @@ class DetectionJob:
         self.device = resolve_device(params.get("device", "auto"))
         self.half = use_half(self.device, params.get("half", True))
         self.train_only = bool(params.get("train_only", False))
+        # Gate line (driver-side person filter, optional — enabled by the JSON
+        # `gate_line` key). inside_side is +1/-1.
+        self.gate_pts, self.gate_side = load_gate_info(annotations_file)
+        self._last_selected_idx = None
 
     # ------------------------------------------------------------------
     # Public
@@ -322,12 +329,7 @@ class DetectionJob:
         results = self.model(frame, verbose=False, conf=model_conf,
                              imgsz=imgsz, quantize=quant, device=self.device)
         kp = results[0].keypoints if (results and results[0].keypoints is not None) else None
-        kp = self._filter_best_person(kp, results)
-        if kp is not None and results is not None:
-            results[0].keypoints = kp
-            if results[0].boxes is not None and len(results[0].boxes) > len(kp):
-                results[0].boxes = results[0].boxes[
-                    [results[0].boxes.conf.argmax().item()]]
+        kp = self._apply_person_filter(kp, results)
 
         active, _new_events = self.detector.update(kp, cur_frame)
 
@@ -339,7 +341,7 @@ class DetectionJob:
         annotated = viz.draw_pose(frame, results, self.conf_mapper)
         viz.draw_arm_rays(annotated, kp, self.detector.regions, self.conf_mapper)
         viz.draw_annotations(annotated, self.detector.regions, self.detector.lines,
-                             self._track_roi_name)
+                             self._track_roi_name, gate=self._gate_dict())
         viz.draw_confidence_legend(annotated, self.conf_mapper)
 
         if self.train_detector is not None:
@@ -647,15 +649,56 @@ class DetectionJob:
                 return r["xywh"]
         return None
 
-    @staticmethod
-    def _filter_best_person(kp, results):
-        if kp is None or results is None or results[0].boxes is None:
+    def _apply_person_filter(self, kp, results):
+        """Filter keypoints+boxes to the driver-side person (single index).
+
+        With a gate line configured, only persons with a body anchor on the
+        driver side are kept; when nobody qualifies all persons are dropped so
+        detection reports nothing. Without a gate line, falls back to the
+        highest-confidence bbox (original behaviour). The selected index is
+        used for BOTH keypoints and boxes so they stay in sync.
+        """
+        idx = self._select_person_idx(results)
+        if kp is None or results is None:
             return kp
+        if idx is not None:
+            kp = kp[[idx]]
+            results[0].keypoints = kp
+            if results[0].boxes is not None and len(results[0].boxes) > 1:
+                results[0].boxes = results[0].boxes[[idx]]
+        elif self.gate_pts is not None:
+            # Gate active but nobody qualifies — drop all persons
+            kp = kp[0:0]
+            results[0].keypoints = kp
+            if results[0].boxes is not None:
+                results[0].boxes = results[0].boxes[0:0]
+        return kp
+
+    def _select_person_idx(self, results):
+        """Choose the driver person index via the gate line, or None to drop all."""
+        if results is None or results[0].boxes is None or results[0].keypoints is None:
+            self._last_selected_idx = None
+            return None
         boxes = results[0].boxes
-        if len(boxes) <= 1:
-            return kp
-        best_idx = boxes.conf.argmax().item()
-        return kp[[best_idx]]
+        if len(boxes) == 0:
+            self._last_selected_idx = None
+            return None
+        kp = results[0].keypoints
+        idx = select_person_idx(
+            boxes.xyxy.cpu().numpy(), boxes.conf.cpu().numpy(),
+            kp.xy.cpu().numpy(), kp.conf.cpu().numpy(),
+            self.gate_pts, self.gate_side,
+            margin=GATE_MARGIN, conf_threshold=CONF_THRESHOLD,
+            last_idx=self._last_selected_idx,
+        )
+        self._last_selected_idx = idx
+        return idx
+
+    def _gate_dict(self):
+        """Gate annotation dict for rendering, or None when not configured."""
+        if self.gate_pts is None:
+            return None
+        return {"pts": self.gate_pts, "inside_side": self.gate_side}
 
     def _cleanup(self):
         if self.out is not None:

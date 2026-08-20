@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="Cache-Control" content="no-store" />
   <title>地铁司机标准化作业行为智能分析系统</title>
-  <link rel="stylesheet" href="/static/style.css?v=8" />
+  <link rel="stylesheet" href="/static/style.css?v=11" />
 </head>
 <body>
   <header class="topbar">
@@ -39,6 +39,12 @@
               </label>
               <label>站点
                 <select id="detectStation"></select>
+              </label>
+              <label>方向
+                <select id="detectDirection">
+                  <option value="up">上行</option>
+                  <option value="down">下行</option>
+                </select>
               </label>
             </div>
             <div class="badge" id="detectAnnotationBadge">标注状态: —</div>
@@ -143,6 +149,12 @@
             <label>站点
               <select id="annoStation"></select>
             </label>
+            <label>方向
+              <select id="annoDirection">
+                <option value="up">上行</option>
+                <option value="down">下行</option>
+              </select>
+            </label>
             <div class="badge" id="annoBadge">标注状态: —</div>
           </div>
         </div>
@@ -155,6 +167,7 @@
             <button class="tool active" data-tool="select">选择</button>
             <button class="tool" data-tool="rect">矩形</button>
             <button class="tool" data-tool="line">线段</button>
+            <button class="tool" data-tool="gate">门线</button>
             <button class="tool" data-tool="track">轨道ROI</button>
             <button class="tool" data-tool="delete">删除</button>
             <span class="sep"></span>
@@ -246,8 +259,8 @@
                 <th>线路</th>
                 <th>站点</th>
                 <th>拼音标识</th>
-                <th>标注状态</th>
-                <th>缺失项</th>
+                <th>上行</th>
+                <th>下行</th>
                 <th>操作</th>
               </tr>
             </thead>
@@ -273,6 +286,6 @@
 
   <div id="toast" class="toast" hidden></div>
 
-  <script src="/static/app.js?v=8"></script>
+  <script src="/static/app.js?v=11"></script>
 </body>
 </html>

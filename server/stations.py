@@ -50,14 +50,14 @@ PINYIN = {
     "镇坪路": "zhenpinglu",
     "曹杨路": "caoyanglu",
     "金沙江路": "jinshajianglu",
-    "中山公园": "zhongshangongyuan",
+    "中山公园": "zhongshanpark",
     "延安西路": "yananxilu",
     "虹桥路": "hongqiaolu",
     "宜山路": "yishanlu",
     "漕溪路": "caoxilu",
-    "龙漕路": "longcaolu",
+    "龙漕路": "longcao",
     "石龙路": "shilonglu",
-    "上海南站": "shanghainanzhan",
+    "上海南站": "shanghainan",
     # 4号线
     "上海体育馆": "shanghaitiyuguan",
     "上海体育场": "shanghaitiyuchang",
@@ -98,14 +98,14 @@ PINYIN = {
     "肇嘉浜路": "zhaojiabanglu",
     "龙华中路": "longhuazhonglu",
     "后滩": "houtan",
-    "长清路": "changqinglu",
+    "长清路": "changqing",
     "耀华路": "yaohualu",
     "云台路": "yuntailu",
     "高科西路": "gaokexilu",
     "杨高南路": "yanggaonanlu",
     "锦绣路": "jinxiulu",
     "芳华路": "fanghualu",
-    "龙阳路": "longyanglu",
+    "龙阳路": "longyang",
     "花木路": "huamulu",
     # 15号线
     "紫竹高新区": "zizhugaoxinqu",
@@ -225,6 +225,26 @@ DEFAULT_PARAMS = {
 }
 
 # ---------------------------------------------------------------------------
+# Directions (上行 / 下行) — each station has two platform-end doors and a
+# separate annotation file per direction. Direction files append pinyin
+# ``shangxing`` / ``xiaxing`` to the station key.
+# ---------------------------------------------------------------------------
+
+DIRECTIONS = {"up": "上行", "down": "下行"}
+
+_DIRECTION_SUFFIX = {"up": "shangxing", "down": "xiaxing"}
+
+
+def direction_suffix(direction):
+    return _DIRECTION_SUFFIX.get(direction, "shangxing")
+
+
+def direction_key(base_key, direction):
+    """'jingansi' + 'up' → 'jingansishangxing'."""
+    return base_key + direction_suffix(direction)
+
+
+# ---------------------------------------------------------------------------
 # Registry helpers
 # ---------------------------------------------------------------------------
 
@@ -279,25 +299,36 @@ def get_lines():
 
 
 def get_stations(line):
-    """Return station entries for a line.
+    """Return station entries for a line, with per-direction status.
 
-    Each entry: ``{name, key, annotated, configured, status, missing}`` where
-    status is ``annotated`` / ``incomplete`` / ``unannotated`` and *missing*
-    lists the incomplete required fields.
+    Each entry: ``{name, key, configured, annotated, status, directions}``
+    where ``directions`` maps ``up``/``down`` to ``{key, label, status,
+    missing, annotated}``.
     """
     entries = []
     for name in _STATIONS.get(line, []):
         key = station_key(line, name)
-        status, missing = annotation_completeness(line, name)
-        annotated = status != "unannotated"
         configured = key in STATION_CONFIGS
+        directions = {}
+        any_annotated = False
+        for d, dlabel in DIRECTIONS.items():
+            status, missing = annotation_completeness(line, name, d)
+            is_annotated = status != "unannotated"
+            any_annotated = any_annotated or is_annotated
+            directions[d] = {
+                "key": direction_key(key, d),
+                "label": dlabel,
+                "status": status,
+                "missing": missing,
+                "annotated": is_annotated,
+            }
         entries.append({
             "name": name,
             "key": key,
-            "annotated": annotated,
             "configured": configured,
-            "status": status,
-            "missing": missing,
+            "annotated": any_annotated,
+            "status": "annotated" if any_annotated else "unannotated",
+            "directions": directions,
         })
     return entries
 
@@ -305,14 +336,14 @@ def get_stations(line):
 REQUIRED_ANNOTATION_FIELDS = ["regions", "lines", "track_roi", "background"]
 
 
-def annotation_completeness(line, name):
-    """Check a station's annotation JSON for required fields.
+def annotation_completeness(line, name, direction=None):
+    """Check a station(+direction) annotation JSON for required fields.
 
     Returns:
         ``(status, missing)`` — status is ``annotated`` / ``incomplete`` /
         ``unannotated``; *missing* lists human-readable missing items.
     """
-    path = resolve_annotation_path(line, name)
+    path = resolve_annotation_path(line, name, direction)
     if not os.path.exists(path):
         return "unannotated", []
     try:
@@ -339,31 +370,42 @@ def annotation_completeness(line, name):
 
 
 def annotation_file_exists(line, name):
-    return os.path.exists(resolve_annotation_path(line, name))
+    """True if the station has any annotation file (any direction or legacy)."""
+    for direction in (None, "up", "down"):
+        path = resolve_annotation_path(line, name, direction)
+        if os.path.exists(path):
+            return True
+    return False
 
 
-def resolve_annotation_path(line, name):
-    """Return the path to a station's annotation JSON.
+def resolve_annotation_path(line, name, direction=None):
+    """Return the path to a station(+direction) annotation JSON.
 
-    Prefers the new ``regions_{line}_{key}.json`` naming, then falls back to the
-    legacy ``regions_{key}.json`` naming used by the existing seven stations.
-    If neither exists, returns the new-format path (for saving new annotations).
+    Resolution order:
+    1. ``regions_{线}_{站拼音}{上下行}.json`` (new naming)
+    2. ``regions_{站拼音}{上下行}.json`` (user convention, no line number)
+    3. legacy undirected ``regions_{站拼音}.json`` (transitional fallback)
+    If nothing exists, returns the new-format path (for saving).
     """
-    key = station_key(line, name)
+    base_key = station_key(line, name)
     ln = line_number(line)
-    new_path = os.path.join(DATA_DIR, f"regions_{ln}_{key}.json")
-    legacy_path = os.path.join(DATA_DIR, f"regions_{key}.json")
+    full_key = direction_key(base_key, direction) if direction else base_key
+    new_path = os.path.join(DATA_DIR, f"regions_{ln}_{full_key}.json")
     if os.path.exists(new_path):
         return new_path
-    if os.path.exists(legacy_path):
-        return legacy_path
+    no_line = os.path.join(DATA_DIR, f"regions_{full_key}.json")
+    if os.path.exists(no_line):
+        return no_line
+    if direction:
+        legacy = os.path.join(DATA_DIR, f"regions_{base_key}.json")
+        if os.path.exists(legacy):
+            return legacy
     return new_path
 
 
-def resolve_background_path(line, name):
+def resolve_background_path(line, name, direction=None):
     """Return the background image path referenced by a station's annotation."""
-    import json
-    json_path = resolve_annotation_path(line, name)
+    json_path = resolve_annotation_path(line, name, direction)
     if not os.path.exists(json_path):
         return None
     with open(json_path, encoding="utf-8") as f:

@@ -1,10 +1,13 @@
 """Drawing and rendering utilities for pose detection visualization."""
 
+import math
+
 import cv2
 import numpy as np
 
 from .config import (
     SHOW_KEYPOINTS, SKELETON, KP_COLORS, LINE_COLOR, CONF_THRESHOLD,
+    GATE_LINE_COLOR,
 )
 
 
@@ -65,11 +68,13 @@ def draw_pose(frame, results, conf_mapper=None):
 # Annotation overlay (regions + reference lines)
 # ---------------------------------------------------------------------------
 
-def draw_annotations(frame, regions, lines, track_roi_name=None):
+def draw_annotations(frame, regions, lines, track_roi_name=None, gate=None):
     """Draw saved rectangular regions and reference lines on *frame* (in-place).
 
     If *track_roi_name* matches a region's name, that region is drawn in blue
     with a ``[Track]`` label to distinguish it from other detection regions.
+    *gate* is an optional dict ``{"pts": [...], "inside_side": +1/-1}`` — the
+    gate line is drawn in white with an ``IN`` marker on the driver side.
     """
     for region in regions:
         x, y, w, h = region["xywh"]
@@ -86,6 +91,22 @@ def draw_annotations(frame, regions, lines, track_roi_name=None):
         cv2.arrowedLine(frame, pt1, pt2, (0, 200, 255), 2, tipLength=0.08)
         cv2.putText(frame, ln["name"], (pt1[0] + 5, pt1[1] - 8),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 200, 255), 2)
+
+    if gate is not None:
+        pt1, pt2 = gate["pts"]
+        inside_side = gate.get("inside_side", 1)
+        cv2.line(frame, pt1, pt2, GATE_LINE_COLOR, 3, cv2.LINE_AA)
+        cv2.putText(frame, "GATE", (pt1[0] + 5, pt1[1] - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, GATE_LINE_COLOR, 2)
+        # "IN" label offset perpendicular to the line, on the driver side
+        dx, dy = pt2[0] - pt1[0], pt2[1] - pt1[1]
+        seg = max(math.hypot(dx, dy), 1e-6)
+        nx, ny = -dy / seg, dx / seg
+        mx, my = (pt1[0] + pt2[0]) / 2.0, (pt1[1] + pt2[1]) / 2.0
+        label_x = int(mx + nx * 40 * inside_side)
+        label_y = int(my + ny * 40 * inside_side)
+        cv2.putText(frame, "IN", (label_x, label_y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, GATE_LINE_COLOR, 2)
 
 
 # ---------------------------------------------------------------------------

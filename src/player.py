@@ -9,10 +9,13 @@ from . import visualization as viz
 from .annotation import (select_roi, draw_line_interactive,
                          remove_last_region, remove_last_line,
                          save_annotations, save_background,
-                         load_background_info)
+                         load_background_info, load_gate_info)
 from .analyzer import SequenceAnalyzer
 from .confidence_color import ConfidenceColorMapper
-from .config import CONF_LOW_THRESHOLD, CONF_MID_THRESHOLD, REPORT_OUTPUT_DIR
+from .config import (CONF_LOW_THRESHOLD, CONF_MID_THRESHOLD, CONF_THRESHOLD,
+                     GATE_MARGIN, REPORT_OUTPUT_DIR)
+from .person_filter import (select_person_idx as _select_person,
+                            person_anchors, signed_dist_to_line)
 from .reporter import generate_report
 from .timefmt import format_hms
 from .train_detector import TrainDetector
@@ -88,6 +91,11 @@ class VideoPlayer:
         self._last_kp = None
         self._last_raw_frame = None
         self._last_results = None
+
+        # Gate line (driver-side person filter, optional — enabled by the JSON
+        # `gate_line` key). inside_side is +1/-1.
+        self.gate_pts, self.gate_side = load_gate_info(annotations_file)
+        self._last_selected_idx = None
 
         # Train detector (optional — enabled when background + track_roi exist)
         self.train_detector = None
@@ -250,17 +258,13 @@ class VideoPlayer:
         if (self.frame_skip <= 0 or cur_frame % (self.frame_skip + 1) == 0
                 or self._last_results is None):
             results = self.model(frame, verbose=False, conf=self.model_conf,
-                                 imgsz=self.imgsz, quantize=16 if self.half else None)
+                                 imgsz=self.imgsz, half=self.half)
             self._last_results = results
         else:
             results = self._last_results
         kp = results[0].keypoints if (results and results[0].keypoints is not None) else None
 
-        kp = self._filter_best_person(kp, results)
-        if kp is not None and results is not None:
-            results[0].keypoints = kp
-            if results[0].boxes is not None and len(results[0].boxes) > len(kp):
-                results[0].boxes = results[0].boxes[[results[0].boxes.conf.argmax().item()]]
+        kp = self._apply_person_filter(kp, results)
 
         # Parallel detection
         active, new_events = self.detector.update(kp, cur_frame)
@@ -279,7 +283,7 @@ class VideoPlayer:
         annotated = viz.draw_pose(frame, results, self.conf_mapper)
         viz.draw_arm_rays(annotated, kp, self.detector.regions, self.conf_mapper)
         viz.draw_annotations(annotated, self.detector.regions, self.detector.lines,
-                             self._track_roi_name)
+                             self._track_roi_name, gate=self._gate_dict())
         viz.draw_confidence_legend(annotated, self.conf_mapper)
 
         # Train detection (background only, result printed at end)
@@ -455,7 +459,8 @@ class VideoPlayer:
             cur = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES))
             save_annotations(self.annotations_file, self.detector.regions,
                              self.detector.lines, self.video_path, cur,
-                             self.width, self.height)
+                             self.width, self.height,
+                             gate_line=self._gate_line_to_save())
             print(f"✅ 已保存 {len(self.detector.regions)} 个区域 + "
                   f"{len(self.detector.lines)} 条参考线 -> {self.annotations_file}")
 
@@ -494,6 +499,9 @@ class VideoPlayer:
         elif key == ord('k') and self._paused:
             self.detector.lines = remove_last_line(self.detector.lines)
 
+        elif self._handle_gate_key(key):
+            pass  # gate keys (G draw/flip, X delete) already handled
+
         return False
 
     def _handle_seek(self):
@@ -512,20 +520,16 @@ class VideoPlayer:
                 self._jump_scan_active = self.idle_jump_seconds > 0
                 self._confirm_low_count = 0
             results = self.model(frame, verbose=False, conf=self.model_conf,
-                                 imgsz=self.imgsz, quantize=16 if self.half else None)
+                                 imgsz=self.imgsz, half=self.half)
             kp = results[0].keypoints if (results and results[0].keypoints is not None) else None
-            kp = self._filter_best_person(kp, results)
-            if kp is not None and results is not None:
-                results[0].keypoints = kp
-                if results[0].boxes is not None and len(results[0].boxes) > len(kp):
-                    results[0].boxes = results[0].boxes[[results[0].boxes.conf.argmax().item()]]
+            kp = self._apply_person_filter(kp, results)
             active, _ = self.detector.update(kp, int(self.cap.get(cv2.CAP_PROP_POS_FRAMES)))
             self._last_active = active
             self._last_results = results
             self._last_frame = viz.draw_pose(frame, results, self.conf_mapper)
             viz.draw_arm_rays(self._last_frame, kp, self.detector.regions, self.conf_mapper)
             viz.draw_annotations(self._last_frame, self.detector.regions, self.detector.lines,
-                                 self._track_roi_name)
+                                 self._track_roi_name, gate=self._gate_dict())
             viz.draw_confidence_legend(self._last_frame, self.conf_mapper)
             if self.train_detector is not None:
                 train_state, train_mad = self.train_detector.update(
@@ -550,7 +554,7 @@ class VideoPlayer:
         if self._paused and self._last_frame is not None:
             paused_frame = self._last_frame.copy()
             viz.draw_annotations(paused_frame, self.detector.regions, self.detector.lines,
-                                 self._track_roi_name)
+                                 self._track_roi_name, gate=self._gate_dict())
             viz.draw_pause_indicator(paused_frame)
             cur = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES)) if self.cap else 0
             viz.draw_frame_info(paused_frame, cur, self.total_frames, self.fps)
@@ -592,6 +596,8 @@ class VideoPlayer:
         print("  S    = 保存区域+参考线到 JSON 文件")
         print("  B    = 保存当前帧为背景参考图（轨道空闲时）")
         print("  T    = 框选/删除轨道监控区域（用于列车检测）")
+        print("  G    = 画/翻转门线（只检测线内侧人员，即司机侧）")
+        print("  X    = 删除门线")
         print("  ----- 随时可用 -----")
         print("  Z    = 重置检测器，清空所有事件")
 
@@ -599,16 +605,123 @@ class VideoPlayer:
     # Internal: analysis
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _filter_best_person(kp, results):
-        """Keep only the highest-confidence bounding-box person (driver)."""
-        if kp is None or results is None or results[0].boxes is None:
+    def _apply_person_filter(self, kp, results):
+        """Filter keypoints+boxes to the driver-side person (single index).
+
+        With a gate line configured, only persons with a body anchor on the
+        driver side are kept; when nobody qualifies all persons are dropped so
+        detection reports nothing. Without a gate line, falls back to the
+        highest-confidence bbox (original behaviour). The selected index is
+        used for BOTH keypoints and boxes so they stay in sync.
+        """
+        idx = self._select_person_idx(results)
+        if kp is None or results is None:
             return kp
+        if idx is not None:
+            kp = kp[[idx]]
+            results[0].keypoints = kp
+            if results[0].boxes is not None and len(results[0].boxes) > 1:
+                results[0].boxes = results[0].boxes[[idx]]
+        elif self.gate_pts is not None:
+            # Gate active but nobody qualifies — drop all persons
+            kp = kp[0:0]
+            results[0].keypoints = kp
+            if results[0].boxes is not None:
+                results[0].boxes = results[0].boxes[0:0]
+        return kp
+
+    def _select_person_idx(self, results):
+        """Choose the driver person index via the gate line, or None to drop all.
+
+        Falls back to the highest-confidence bbox when no gate line is
+        configured (original behaviour). The selected index is used for BOTH
+        keypoints and boxes so they stay in sync.
+        """
+        if results is None or results[0].boxes is None or results[0].keypoints is None:
+            self._last_selected_idx = None
+            return None
         boxes = results[0].boxes
-        if len(boxes) <= 1:
-            return kp
-        best_idx = boxes.conf.argmax().item()
-        return kp[[best_idx]]
+        if len(boxes) == 0:
+            self._last_selected_idx = None
+            return None
+        kp = results[0].keypoints
+        idx = _select_person(
+            boxes.xyxy.cpu().numpy(), boxes.conf.cpu().numpy(),
+            kp.xy.cpu().numpy(), kp.conf.cpu().numpy(),
+            self.gate_pts, self.gate_side,
+            margin=GATE_MARGIN, conf_threshold=CONF_THRESHOLD,
+            last_idx=self._last_selected_idx,
+        )
+        self._last_selected_idx = idx
+        return idx
+
+    # ------------------------------------------------------------------
+    # Gate drawing / keys
+    # ------------------------------------------------------------------
+
+    def _handle_gate_key(self, key):
+        """Handle gate-line keys. Returns True if the key was consumed."""
+        if key == ord('g') and self._paused and self._last_frame is not None:
+            self._toggle_gate()
+            return True
+        if key == ord('x') and self._paused:
+            if self.gate_pts is None:
+                print("当前没有门线")
+            else:
+                self.gate_pts = None
+                self._last_selected_idx = None
+                print("门线已删除（恢复置信度选人）")
+            return True
+        return False
+
+    def _toggle_gate(self):
+        """Draw a new gate line, or flip the inside side of the existing one."""
+        if self.gate_pts is None:
+            lines = draw_line_interactive(self.window_name, self._last_frame, [])
+            if not lines:
+                print("取消画门线")
+                return
+            self.gate_pts = lines[-1]['pts']
+            self.gate_side = self._auto_gate_side()
+            self._last_selected_idx = None
+            print(f">>> 门线已设置: {self.gate_pts}  inside_side={self.gate_side}")
+            print(f"    确认 IN 标记在司机侧；反了按 G 翻转，按 S 保存")
+        else:
+            self.gate_side = -self.gate_side
+            print(f">>> 门线内侧已翻转: inside_side={self.gate_side}（按 S 保存）")
+
+    def _auto_gate_side(self):
+        """Auto-set inside_side from the current frame's best person (default +1)."""
+        results = getattr(self, '_last_results', None)
+        if (results is None or results[0].boxes is None
+                or results[0].keypoints is None or len(results[0].boxes) == 0):
+            return 1
+        boxes, kp = results[0].boxes, results[0].keypoints
+        idx = int(boxes.conf.argmax())
+        anchors = person_anchors(
+            boxes.xyxy[idx].cpu().numpy(),
+            kp.xy[idx].cpu().numpy(),
+            kp.conf[idx].cpu().numpy(),
+            CONF_THRESHOLD)
+        d = sum(signed_dist_to_line(self.gate_pts, a) for a in anchors)
+        return 1 if d >= 0 else -1
+
+    # ------------------------------------------------------------------
+    # Rendering / persistence hooks
+    # ------------------------------------------------------------------
+
+    def _gate_dict(self):
+        """Gate annotation dict for rendering, or None when not configured."""
+        if self.gate_pts is None:
+            return None
+        return {"pts": self.gate_pts, "inside_side": self.gate_side}
+
+    def _gate_line_to_save(self):
+        """Gate annotation to persist; None removes the JSON key, ``_UNSET``
+        leaves the existing key untouched."""
+        if self.gate_pts is None:
+            return None
+        return {"pts": self.gate_pts, "inside_side": self.gate_side}
 
     def _lookup_roi(self, name):
         """Return xywh tuple for a region by name, or None."""

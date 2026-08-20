@@ -41,6 +41,7 @@ _current_video = {"path": None}
 class DetectStartBody(BaseModel):
     line: str
     station: str
+    direction: str = "up"
     params: dict = {}
     video_path: str | None = None
     train_only: bool = False
@@ -49,9 +50,11 @@ class DetectStartBody(BaseModel):
 class AnnotationSaveBody(BaseModel):
     line: str
     station: str
+    direction: str = "up"
     regions: list = []
     lines: list = []
     track_roi: str | None = None
+    gate_line: dict | None = None
     video: str = ""
     frame: int = 0
     width: int = 1920
@@ -63,6 +66,7 @@ class AnnotationSaveBody(BaseModel):
 class AnnotationLoadBody(BaseModel):
     line: str
     station: str
+    direction: str = "up"
 
 
 class ExtractFrameBody(BaseModel):
@@ -75,8 +79,8 @@ class ExtractFrameBody(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _annotation_json(line, station):
-    path = st.resolve_annotation_path(line, station)
+def _annotation_json(line, station, direction=None):
+    path = st.resolve_annotation_path(line, station, direction)
     if not os.path.exists(path):
         return None
     with open(path, encoding="utf-8") as f:
@@ -131,26 +135,29 @@ def annotation_status(line: str | None = None):
         entries = st.get_stations(ln["name"])
         l_ann = l_inc = 0
         for e in entries:
-            total += 1
-            if e["status"] == "annotated":
-                annotated += 1
-                l_ann += 1
-            elif e["status"] == "incomplete":
-                incomplete += 1
-                l_inc += 1
+            for d, info in e["directions"].items():
+                total += 1
+                if info["status"] == "annotated":
+                    annotated += 1
+                    l_ann += 1
+                elif info["status"] == "incomplete":
+                    incomplete += 1
+                    l_inc += 1
             detail.append({
                 "line": ln["name"],
                 "station": e["name"],
                 "key": e["key"],
                 "status": e["status"],
-                "missing": e["missing"],
+                "up": e["directions"]["up"],
+                "down": e["directions"]["down"],
             })
         per_line.append({
             "line": ln["name"],
-            "total": len(entries),
+            "stations": len(entries),
+            "total": len(entries) * 2,
             "annotated": l_ann,
             "incomplete": l_inc,
-            "unannotated": len(entries) - l_ann - l_inc,
+            "unannotated": len(entries) * 2 - l_ann - l_inc,
         })
     return {
         "total": total,
@@ -169,8 +176,6 @@ def stations_bindfile(line: str, station_key: str):
     if not os.path.exists(path):
         raise HTTPException(404, "该站点无标注文件")
     return {"path": path, "content": _annotation_json(line, station_key)}
-
-
 # ---------------------------------------------------------------------------
 # Parameters
 # ---------------------------------------------------------------------------
@@ -265,6 +270,7 @@ def video_stream():
 @app.post("/api/detect/start")
 def detect_start(body: DetectStartBody):
     global _current_video
+    direction = body.direction if body.direction in st.DIRECTIONS else "up"
     train_only = bool(body.train_only)
     cfg = st.get_config(body.line, body.station)
     if not train_only and cfg is None:
@@ -274,9 +280,9 @@ def detect_start(body: DetectStartBody):
     if not video_path or not os.path.exists(video_path):
         raise HTTPException(400, "请先加载视频文件")
 
-    annotations_file = st.resolve_annotation_path(body.line, body.station)
+    annotations_file = st.resolve_annotation_path(body.line, body.station, direction)
     if not os.path.exists(annotations_file):
-        raise HTTPException(400, "该站点缺少标注文件，请先在标注工具中完成标注")
+        raise HTTPException(400, f"该站点（{st.DIRECTIONS[direction]}）缺少标注文件，请先在标注工具中完成标注")
 
     params = dict(st.DEFAULT_PARAMS)
     params.update(_current_params)
@@ -284,11 +290,16 @@ def detect_start(body: DetectStartBody):
     params["output_dir"] = OUTPUT_DIR
     params["train_only"] = train_only
 
+    station_name = body.station
+    if cfg:
+        station_name = cfg["station_name"]
+    station_name = f"{station_name}（{st.DIRECTIONS[direction]}）"
+
     job_id = TASK_MANAGER.start(
         model_path=DEFAULT_MODEL,
         video_path=video_path,
         annotations_file=annotations_file,
-        station_name=cfg["station_name"] if cfg else body.station,
+        station_name=station_name,
         rules=cfg["rules"] if cfg else [],
         action_mapping=cfg["action_mapping"] if cfg else [],
         detection_kwargs=_detection_kwargs(params),
@@ -372,23 +383,26 @@ def result_video_stream():
 
 @app.post("/api/annotation/load")
 def annotation_load(body: AnnotationLoadBody):
-    data = _annotation_json(body.line, body.station)
+    direction = body.direction if body.direction in st.DIRECTIONS else "up"
+    data = _annotation_json(body.line, body.station, direction)
     if data is None:
         return {"found": False, "data": None, "background_url": None}
     key = st.station_key(body.line, body.station)
     data.setdefault("line", body.line)
     data.setdefault("station", body.station)
     data.setdefault("station_key", key)
+    data.setdefault("direction", st.DIRECTIONS[direction])
     bg_url = None
     if data.get("background") and data["background"].get("image"):
         bg_url = (f"/api/annotation/background?line={body.line}"
-                  f"&station={body.station}")
-    return {"found": True, "data": data, "background_url": bg_url}
+                  f"&station={body.station}&direction={direction}")
+    return {"found": True, "data": data, "background_url": bg_url,
+            "direction": direction}
 
 
 @app.get("/api/annotation/background")
-def annotation_background(line: str, station: str):
-    path = st.resolve_background_path(line, station)
+def annotation_background(line: str, station: str, direction: str = "up"):
+    path = st.resolve_background_path(line, station, direction)
     if not path or not os.path.exists(path):
         raise HTTPException(404, "背景图不存在")
     return FileResponse(path, media_type="image/png")
@@ -396,15 +410,18 @@ def annotation_background(line: str, station: str):
 
 @app.post("/api/annotation/save")
 def annotation_save(body: AnnotationSaveBody):
+    direction = body.direction if body.direction in st.DIRECTIONS else "up"
     key = st.station_key(body.line, body.station)
-    path = st.resolve_annotation_path(body.line, body.station)
+    full_key = st.direction_key(key, direction)
+    path = st.resolve_annotation_path(body.line, body.station, direction)
     data_dir = os.path.dirname(path)
     os.makedirs(data_dir, exist_ok=True)
 
     # Persist background image if provided as base64
     background = dict(body.background) if body.background else {}
+    bg_name = None
     if body.background_data:
-        bg_name = f"regions_{st.line_number(body.line)}_{key}_background.png"
+        bg_name = f"regions_{st.line_number(body.line)}_{full_key}_background.png"
         bg_path = os.path.join(data_dir, bg_name)
         raw = base64.b64decode(body.background_data.split(",", 1)[-1])
         with open(bg_path, "wb") as f:
@@ -415,6 +432,7 @@ def annotation_save(body: AnnotationSaveBody):
         "line": body.line,
         "station": body.station,
         "station_key": key,
+        "direction": st.DIRECTIONS[direction],
         "video": body.video,
         "frame": body.frame,
         "width": body.width,
@@ -429,11 +447,17 @@ def annotation_save(body: AnnotationSaveBody):
         data["background"] = background
     if body.track_roi:
         data["track_roi"] = body.track_roi
+    if body.gate_line and body.gate_line.get("pts"):
+        data["gate_line"] = {
+            "pts": [[int(p[0]), int(p[1])] for p in body.gate_line["pts"]],
+            "inside_side": int(body.gate_line.get("inside_side", 1)),
+        }
 
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
-    return {"ok": True, "path": path, "key": key}
+    return {"ok": True, "path": path, "key": key, "full_key": full_key,
+            "direction": direction, "background_name": bg_name}
 
 
 @app.post("/api/annotation/extract_frame")
@@ -471,15 +495,18 @@ def annotation_stations(line: str | None = None):
 
 @app.post("/api/annotation/delete")
 def annotation_delete(body: AnnotationLoadBody):
-    """Remove a station's annotation (JSON + background image).
+    """Remove a station(+direction) annotation (JSON + background image).
 
-    The station itself stays in the registry — it simply becomes 未标注.
+    The station itself stays in the registry — the direction simply becomes
+    未标注. Undirected legacy files are left untouched.
     """
+    direction = body.direction if body.direction in st.DIRECTIONS else "up"
     key = st.station_key(body.line, body.station)
+    full_key = st.direction_key(key, direction)
     ln = st.line_number(body.line)
     candidates = [
-        os.path.join(DATA_DIR, f"regions_{ln}_{key}.json"),
-        os.path.join(DATA_DIR, f"regions_{key}.json"),
+        os.path.join(DATA_DIR, f"regions_{ln}_{full_key}.json"),
+        os.path.join(DATA_DIR, f"regions_{full_key}.json"),
     ]
     deleted = []
     for p in candidates:
@@ -499,7 +526,7 @@ def annotation_delete(body: AnnotationLoadBody):
         os.remove(p)
         deleted.append(os.path.basename(p))
     if not deleted:
-        raise HTTPException(404, "该站点没有标注文件")
+        raise HTTPException(404, "该站点方向没有标注文件")
     return {"ok": True, "deleted": deleted}
 
 

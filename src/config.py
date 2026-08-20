@@ -70,3 +70,9 @@ FRAME_DECAY = 2                     # hold counter decay per frame (tolerates br
 # ---------------------------------------------------------------------------
 CONF_LOW_THRESHOLD = 0.3             # below this: red
 CONF_MID_THRESHOLD = 0.6             # below this (>= low): yellow;  above: green
+
+# ---------------------------------------------------------------------------
+# Gate line (driver-side person filter)
+# ---------------------------------------------------------------------------
+GATE_MARGIN = 12                     # px dead-band tolerance around the gate line
+GATE_LINE_COLOR = (255, 255, 255)    # white — distinct from reference-line orange

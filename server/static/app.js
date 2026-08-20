@@ -54,8 +54,10 @@ const state = {
   lines: [],
   detectLine: null,
   detectStation: null,
+  detectDirection: "up",
   annoLine: null,
   annoStation: null,
+  annoDirection: "up",
   params: {},
   video: null,
   taskId: null,
@@ -84,17 +86,14 @@ function fillStationSelect(sel, lineName, annotatedOnly) {
   ln.stations.forEach((s) => {
     const o = document.createElement("option");
     o.value = s.name;
-    const statusLabel = s.status === "annotated" ? "已标注" :
-      s.status === "incomplete" ? "标注不完整" : "未标注";
     if (annotatedOnly && !s.annotated) {
       o.disabled = true;
       o.textContent = `${s.name}（未标注）`;
     } else {
-      o.textContent = s.name + (s.annotated ? `（${statusLabel}）` : "");
+      o.textContent = s.name + (s.annotated ? "（已标注）" : "");
     }
     o.dataset.key = s.key;
     o.dataset.annotated = s.annotated ? "1" : "0";
-    o.dataset.status = s.status || "";
     sel.appendChild(o);
   });
 }
@@ -111,6 +110,17 @@ async function loadStations() {
   fillLineSelect($("#annoLine"), onAnnoLine);
 }
 
+function dirLabel(d) {
+  return d === "down" ? "下行" : "上行";
+}
+
+function stationDirections(lineName, stationName) {
+  const ln = state.lines.find((l) => l.name === lineName);
+  if (!ln) return null;
+  const s = ln.stations.find((x) => x.name === stationName);
+  return s ? s.directions : null;
+}
+
 function onDetectLine() {
   state.detectLine = $("#detectLine").value;
   state.detectStation = null;
@@ -122,13 +132,32 @@ function onDetectLine() {
 
 function onDetectStation() {
   state.detectStation = $("#detectStation").value;
-  const opt = $("#detectStation").selectedOptions[0];
-  const status = opt && opt.dataset.status;
-  if (status === "annotated") setBadge($("#detectAnnotationBadge"), "ok", "标注状态: 已标注");
-  else if (status === "incomplete") setBadge($("#detectAnnotationBadge"), "warn", "标注状态: 标注不完整");
-  else setBadge($("#detectAnnotationBadge"), "warn", "标注状态: 未标注");
+  updateDetectBadge();
   updateStartButton();
   updateStatusBar();
+}
+
+function onDetectDirection() {
+  state.detectDirection = $("#detectDirection").value;
+  updateDetectBadge();
+  updateStatusBar();
+}
+
+function updateDetectBadge() {
+  if (!state.detectLine || !state.detectStation) {
+    setBadge($("#detectAnnotationBadge"), "", "标注状态: —");
+    return;
+  }
+  const dirs = stationDirections(state.detectLine, state.detectStation);
+  const info = dirs && dirs[state.detectDirection];
+  if (!info) {
+    setBadge($("#detectAnnotationBadge"), "warn", "标注状态: 未标注");
+    return;
+  }
+  const label = dirLabel(state.detectDirection);
+  if (info.status === "annotated") setBadge($("#detectAnnotationBadge"), "ok", `${label}标注状态: 已标注`);
+  else if (info.status === "incomplete") setBadge($("#detectAnnotationBadge"), "warn", `${label}标注状态: 标注不完整`);
+  else setBadge($("#detectAnnotationBadge"), "warn", `${label}标注状态: 未标注`);
 }
 
 function updateStartButton() {
@@ -157,16 +186,37 @@ function onAnnoLine() {
 
 async function onAnnoStation() {
   state.annoStation = $("#annoStation").value;
-  const opt = $("#annoStation").selectedOptions[0];
-  const annotated = opt && opt.dataset.annotated === "1";
-  setBadge($("#annoBadge"), annotated ? "ok" : "warn",
-    annotated ? "标注状态: 已标注" : "标注状态: 未标注");
+  updateAnnoBadge();
   await loadAnnotationForStation();
+}
+
+function onAnnoDirection() {
+  state.annoDirection = $("#annoDirection").value;
+  updateAnnoBadge();
+  loadAnnotationForStation();
+}
+
+function updateAnnoBadge() {
+  if (!state.annoLine || !state.annoStation) {
+    setBadge($("#annoBadge"), "", "标注状态: —");
+    return;
+  }
+  const dirs = stationDirections(state.annoLine, state.annoStation);
+  const info = dirs && dirs[state.annoDirection];
+  const label = dirLabel(state.annoDirection);
+  if (!info || info.status === "unannotated") {
+    setBadge($("#annoBadge"), "warn", `${label}标注状态: 未标注`);
+  } else if (info.status === "incomplete") {
+    setBadge($("#annoBadge"), "warn", `${label}标注状态: 标注不完整`);
+  } else {
+    setBadge($("#annoBadge"), "ok", `${label}标注状态: 已标注`);
+  }
 }
 
 function updateStatusBar() {
   const parts = [];
-  parts.push(`${state.detectLine || "未选线路"}/${state.detectStation || "未选站点"}`);
+  const stName = state.detectStation ? `${state.detectStation}(${dirLabel(state.detectDirection)})` : "未选站点";
+  parts.push(`${state.detectLine || "未选线路"}/${stName}`);
   if (state.result) parts.push("检测完成");
   else if (state.taskId) parts.push("检测中…");
   else parts.push("待检测");
@@ -179,17 +229,21 @@ async function loadAnnotationForStation() {
     const res = await api("/api/annotation/load", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ line: state.annoLine, station: state.annoStation }),
+      body: JSON.stringify({
+        line: state.annoLine,
+        station: state.annoStation,
+        direction: state.annoDirection,
+      }),
     });
     if (res.found) {
       anno.loadData(res.data);
       if (res.background_url) await anno.loadBackgroundUrl(res.background_url);
       else anno.clearBackground();
-      toast(`已加载标注（区域 ${res.data.regions.length}，线段 ${res.data.lines.length}）`);
+      toast(`已加载${dirLabel(state.annoDirection)}标注（区域 ${res.data.regions.length}，线段 ${res.data.lines.length}）`);
     } else {
       anno.reset();
       anno.clearBackground();
-      toast("该站点暂无标注，请加载背景图并开始标注");
+      toast(`该站点${dirLabel(state.annoDirection)}暂无标注，请加载背景图并开始标注`);
     }
   } catch (e) {
     toast(e.message);
@@ -321,6 +375,7 @@ async function startDetect() {
       body: JSON.stringify({
         line: state.detectLine,
         station: state.detectStation,
+        direction: state.detectDirection,
         params,
         train_only: state.trainOnly,
       }),
@@ -483,8 +538,10 @@ const anno = {
   regions: [],
   lines: [],
   trackRoi: null,
+  gate: null,
   background: null,
   backgroundName: null,
+  backgroundDirty: false,
   tool: "select",
   view: { scale: 1, ox: 0, oy: 0 },
   selected: null,
@@ -575,8 +632,48 @@ function annoMouseDown(e) {
     }
     return;
   }
+  if (anno.tool === "gate") {
+    const gateHit = hitTestGate(imgP);
+    if (gateHit) {
+      snapshot();
+      anno.gate.inside_side = -anno.gate.inside_side;
+      renderAnno();
+      renderAnnoList();
+      updateAnnoStatusBar();
+      toast(`门线内侧已翻转（IN 标记在${anno.gate.inside_side === 1 ? "正侧" : "反侧"}）`);
+      return;
+    }
+    if (!anno.drawing || anno.drawing.type !== "gate") {
+      anno.drawing = { type: "gate", p1: { x: imgP.x, y: imgP.y } };
+    } else {
+      anno.drawing.p2 = { x: imgP.x, y: imgP.y };
+      snapshot();
+      anno.gate = {
+        pts: [[anno.drawing.p1.x, anno.drawing.p1.y], [anno.drawing.p2.x, anno.drawing.p2.y]],
+        inside_side: 1,
+      };
+      anno.drawing = null;
+      renderAnno();
+      renderAnnoList();
+      updateAnnoStatusBar();
+      toast("门线已设置（默认 IN 在正侧，点门线可翻转内侧方向）");
+    }
+    return;
+  }
   if (anno.tool === "delete") {
     const hit = hitTest(imgP);
+    const gateHit = hitTestGate(imgP);
+    if (gateHit) {
+      snapshot();
+      anno.gate = null;
+      anno.selected = null;
+      renderAnno();
+      renderAnnoList();
+      renderPropPanel();
+      updateAnnoStatusBar();
+      toast("门线已删除");
+      return;
+    }
     if (hit) { snapshot(); removeElement(hit); anno.selected = null; renderAnno(); renderAnnoList(); renderPropPanel(); updateAnnoStatusBar(); }
     return;
   }
@@ -610,7 +707,7 @@ function annoMouseMove(e) {
   _cursorPos = p;
   if (!anno.drawing) return;
   const d = anno.drawing;
-  if (d.type === "line") {
+  if (d.type === "line" || d.type === "gate") {
     renderAnno();
     return;
   }
@@ -692,6 +789,13 @@ function nextName(prefix, arr) {
   return `${prefix}_${n}`;
 }
 
+function hitTestGate(imgP) {
+  if (!anno.gate || !anno.gate.pts) return false;
+  const a = imgToScreen(anno.gate.pts[0][0], anno.gate.pts[0][1]);
+  const b = imgToScreen(anno.gate.pts[1][0], anno.gate.pts[1][1]);
+  return distToSeg(imgToScreen(imgP.x, imgP.y), a, b) < 8;
+}
+
 function hitTest(imgP) {
   for (const ln of anno.lines) {
     const a = imgToScreen(ln.pts[0][0], ln.pts[0][1]);
@@ -730,6 +834,7 @@ function snapshot() {
     regions: anno.regions,
     lines: anno.lines,
     trackRoi: anno.trackRoi,
+    gate: anno.gate,
   }));
   if (anno.history.length > 100) anno.history.shift();
   anno.future = [];
@@ -737,11 +842,12 @@ function snapshot() {
 
 function undo() {
   if (!anno.history.length) return;
-  anno.future.push(JSON.stringify({ regions: anno.regions, lines: anno.lines, trackRoi: anno.trackRoi }));
+  anno.future.push(JSON.stringify({ regions: anno.regions, lines: anno.lines, trackRoi: anno.trackRoi, gate: anno.gate }));
   const prev = JSON.parse(anno.history.pop());
   anno.regions = prev.regions;
   anno.lines = prev.lines;
   anno.trackRoi = prev.trackRoi;
+  anno.gate = prev.gate;
   anno.selected = null;
   renderAnno();
   renderAnnoList();
@@ -751,11 +857,12 @@ function undo() {
 
 function redo() {
   if (!anno.future.length) return;
-  anno.history.push(JSON.stringify({ regions: anno.regions, lines: anno.lines, trackRoi: anno.trackRoi }));
+  anno.history.push(JSON.stringify({ regions: anno.regions, lines: anno.lines, trackRoi: anno.trackRoi, gate: anno.gate }));
   const next = JSON.parse(anno.future.pop());
   anno.regions = next.regions;
   anno.lines = next.lines;
   anno.trackRoi = next.trackRoi;
+  anno.gate = next.gate;
   renderAnno();
   renderAnnoList();
   renderPropPanel();
@@ -795,6 +902,28 @@ function renderAnno() {
     ctx.fillStyle = "#00c8ff";
     ctx.fillText(ln.name, a.x + 5, a.y - 8);
   });
+  if (anno.gate && anno.gate.pts) {
+    const side = anno.gate.inside_side || 1;
+    const a = imgToScreen(anno.gate.pts[0][0], anno.gate.pts[0][1]);
+    const b = imgToScreen(anno.gate.pts[1][0], anno.gate.pts[1][1]);
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText("GATE", a.x + 5, a.y - 8);
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const seg = Math.max(Math.hypot(dx, dy), 1e-6);
+    const nx = -dy / seg;
+    const ny = dx / seg;
+    const mx = (a.x + b.x) / 2 + nx * 40 * side;
+    const my = (a.y + b.y) / 2 + ny * 40 * side;
+    ctx.font = "bold 14px sans-serif";
+    ctx.fillText("IN", mx, my);
+  }
   if (anno.selected) {
     drawSelection(ctx, anno.selected);
   }
@@ -806,7 +935,7 @@ function renderAnno() {
     ctx.lineWidth = 2;
     ctx.strokeRect(s.x, s.y, e.x - s.x, e.y - s.y);
   }
-  if (anno.drawing && anno.drawing.type === "line" && anno.drawing.p1) {
+  if (anno.drawing && (anno.drawing.type === "line" || anno.drawing.type === "gate") && anno.drawing.p1) {
     const a = imgToScreen(anno.drawing.p1.x, anno.drawing.p1.y);
     const b = canvasPosCursor() || a;
     ctx.strokeStyle = "#00ff88";
@@ -922,8 +1051,9 @@ function renderAnnoList() {
 }
 
 function updateAnnoStatusBar() {
+  const stName = state.annoStation ? `${state.annoStation}(${dirLabel(state.annoDirection)})` : "未选站点";
   $("#annoStatusBar").textContent =
-    `${state.annoLine || "未选线路"}/${state.annoStation || "未选站点"} | 区域: ${anno.regions.length} | 线段: ${anno.lines.length} | 轨道: ${anno.trackRoi || "—"}`;
+    `${state.annoLine || "未选线路"}/${stName} | 区域: ${anno.regions.length} | 线段: ${anno.lines.length} | 轨道: ${anno.trackRoi || "—"}`;
   const zoomLabel = $("#zoomLabel");
   if (zoomLabel) zoomLabel.textContent = `${Math.round(anno.view.scale * 100)}%`;
 }
@@ -965,11 +1095,15 @@ async function loadBackgroundUrl(url) {
   const img = new Image();
   img.onload = () => {
     anno.background = img;
+    anno.backgroundDirty = false;
     anno.bgW = img.naturalWidth;
     anno.bgH = img.naturalHeight;
     fitView();
     renderAnno();
     updateAnnoStatusBar();
+  };
+  img.onerror = () => {
+    toast(`背景图加载失败：${url}`);
   };
   img.src = url;
 }
@@ -977,6 +1111,7 @@ async function loadBackgroundUrl(url) {
 function clearBackground() {
   anno.background = null;
   anno.backgroundName = null;
+  anno.backgroundDirty = false;
   anno.bgW = 0;
   anno.bgH = 0;
   renderAnno();
@@ -990,6 +1125,7 @@ function loadBackgroundFile(file) {
     const img = new Image();
     img.onload = () => {
       anno.background = img;
+      anno.backgroundDirty = true;
       anno.bgW = img.naturalWidth;
       anno.bgH = img.naturalHeight;
       anno.backgroundName = file.name;
@@ -1005,8 +1141,13 @@ function loadBackgroundFile(file) {
   reader.readAsDataURL(file);
 }
 
-function dataUrlFromCanvas() {
-  const c = $("#annoCanvas");
+function backgroundDataUrl() {
+  if (!anno.background) return null;
+  const c = document.createElement("canvas");
+  c.width = anno.background.naturalWidth;
+  c.height = anno.background.naturalHeight;
+  const ctx = c.getContext("2d");
+  ctx.drawImage(anno.background, 0, 0);
   return c.toDataURL("image/png");
 }
 
@@ -1016,12 +1157,13 @@ async function saveAnnotation() {
     return;
   }
   let bgData = null;
-  if (anno.background) {
-    bgData = dataUrlFromCanvas();
+  if (anno.background && anno.backgroundDirty) {
+    bgData = backgroundDataUrl();
   }
   const payload = {
     line: state.annoLine,
     station: state.annoStation,
+    direction: state.annoDirection,
     regions: anno.regions,
     lines: anno.lines,
     track_roi: anno.trackRoi,
@@ -1038,9 +1180,9 @@ async function saveAnnotation() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    anno.backgroundName = res.key ? `regions_${state.annoLine.replace("号线", "")}_${res.key}_background.png` : anno.backgroundName;
-    toast("标注已保存");
-    setBadge($("#annoBadge"), "ok", "标注状态: 已标注");
+    if (res.background_name) anno.backgroundName = res.background_name;
+    toast(`已保存${dirLabel(state.annoDirection)}标注`);
+    updateAnnoBadge();
     updateAnnoStatusBar();
     renderAnnoList();
     await loadStations();
@@ -1058,6 +1200,7 @@ function exportJson() {
     line: state.annoLine,
     station: state.annoStation,
     station_key: state.annoStation ? state.annoStation : "",
+    direction: dirLabel(state.annoDirection),
     video: anno.videoMeta.video,
     frame: anno.videoMeta.frame,
     width: anno.videoMeta.width,
@@ -1068,14 +1211,17 @@ function exportJson() {
     background: anno.backgroundName ? { image: anno.backgroundName, frame: anno.videoMeta.frame } : null,
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-  downloadBlob(blob, `annotation_${data.line || ""}_${data.station_key || "export"}.json`);
+  const suffix = state.annoDirection === "down" ? "xiaxing" : "shangxing";
+  downloadBlob(blob, `annotation_${data.line || ""}_${data.station_key || "export"}_${suffix}.json`);
 }
 
 function exportBackground() {
   if (!anno.background) { toast("当前无背景图"); return; }
+  const url = backgroundDataUrl();
+  if (!url) { toast("背景图导出失败"); return; }
   const a = document.createElement("a");
-  a.href = dataUrlFromCanvas();
-  a.download = "background.png";
+  a.href = url;
+  a.download = anno.backgroundName || "background.png";
   a.click();
 }
 
@@ -1088,7 +1234,9 @@ function importJsonFile(file) {
       if (data.background && data.background.image) {
         const line = data.line || state.annoLine;
         const station = data.station || state.annoStation;
-        loadBackgroundUrl(`/api/annotation/background?line=${encodeURIComponent(line)}&station=${encodeURIComponent(station)}`);
+        const dir = data.direction === "下行" ? "down" :
+          data.direction === "上行" ? "up" : state.annoDirection;
+        loadBackgroundUrl(`/api/annotation/background?line=${encodeURIComponent(line)}&station=${encodeURIComponent(station)}&direction=${dir}`);
       }
       toast("已导入 JSON");
     } catch (e) {
@@ -1123,6 +1271,7 @@ async function extractFrame() {
     const img = new Image();
     img.onload = () => {
       anno.background = img;
+      anno.backgroundDirty = true;
       anno.bgW = res.width;
       anno.bgH = res.height;
       anno.backgroundName = `extracted_frame_${frame}.png`;
@@ -1145,6 +1294,7 @@ async function extractFrame() {
 function initDetection() {
   $("#btnLoadVideo").onclick = () => $("#videoFileInput").click();
   $("#detectStation").addEventListener("change", onDetectStation);
+  $("#detectDirection").addEventListener("change", onDetectDirection);
   $("#videoFileInput").onchange = (e) => { if (e.target.files[0]) loadVideoFile(e.target.files[0]); e.target.value = ""; };
   $("#btnLoadPath").onclick = async () => {
     const p = await promptModal("服务器本地路径", `<input id="modalInput" type="text" placeholder="如 /Volumes/share/video.mp4 或 \\\\server\\share\\a.mp4" style="width:100%;padding:8px" />`);
@@ -1187,6 +1337,7 @@ function highlightCurrentEvent() {
 
 function initAnnoButtons() {
   $("#annoStation").addEventListener("change", onAnnoStation);
+  $("#annoDirection").addEventListener("change", onAnnoDirection);
   $("#btnZoomIn").onclick = () => zoomCanvas(1.25);
   $("#btnZoomOut").onclick = () => zoomCanvas(0.8);
   $("#btnUndo").onclick = undo;
@@ -1250,7 +1401,7 @@ function renderMgmtStats(res) {
     card.className = "stat-card";
     card.innerHTML = `
       <div class="stat-line-name">${p.line}</div>
-      <div class="stat-num">${p.annotated}<span> / ${p.total} 站</span></div>
+      <div class="stat-num">${p.annotated}<span> / ${p.total} 方向</span></div>
       <div class="stat-bar"><div class="stat-fill" style="width:${pct}%"></div></div>
       <div class="stat-sub">完成 ${pct}% · 不完整 ${p.incomplete} · 未标注 ${p.unannotated}</div>`;
     wrap.appendChild(card);
@@ -1258,7 +1409,7 @@ function renderMgmtStats(res) {
   const total = res.total || 0;
   const un = total - (res.annotated || 0) - (res.incomplete || 0);
   $("#manageStatusBar").textContent =
-    `共 ${total} 站 | 已标注 ${res.annotated} | 标注不完整 ${res.incomplete} | 未标注 ${un} | 完成率 ${((res.completion || 0) * 100).toFixed(1)}%`;
+    `共 ${total} 个方向点位 | 已标注 ${res.annotated} | 标注不完整 ${res.incomplete} | 未标注 ${un} | 完成率 ${((res.completion || 0) * 100).toFixed(1)}%`;
 }
 
 function renderMgmtTable(res) {
@@ -1269,46 +1420,57 @@ function renderMgmtTable(res) {
     incomplete: ["warn", "标注不完整"],
     unannotated: ["", "未标注"],
   };
+  const dirCell = (info) => {
+    const [cls, label] = statusMap[info.status] || ["", info.status];
+    const missing = info.missing && info.missing.length
+      ? `<div class="sub-text">${info.missing.join("、")}</div>` : "";
+    return `<span class="badge ${cls}">${label}</span>${missing}`;
+  };
   (res.detail || []).forEach((d) => {
     if (stationMgmt.filter && d.line !== stationMgmt.filter) return;
-    if (stationMgmt.statusFilter && d.status !== stationMgmt.statusFilter) return;
-    const [cls, label] = statusMap[d.status] || ["", d.status];
-    const missing = d.missing && d.missing.length ? d.missing.join("、") : "—";
+    const stOk = (d.up && d.up.status !== "unannotated") || (d.down && d.down.status !== "unannotated");
+    if (stationMgmt.statusFilter === "annotated" && !stOk) return;
+    if (stationMgmt.statusFilter === "unannotated" && stOk) return;
+    if (stationMgmt.statusFilter === "incomplete") {
+      const inc = (d.up && d.up.status === "incomplete") || (d.down && d.down.status === "incomplete");
+      if (!inc) return;
+    }
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${d.line}</td>
       <td>${d.station}</td>
       <td class="mono">${d.key}</td>
-      <td><span class="badge ${cls}">${label}</span></td>
-      <td class="sub-text">${missing}</td>
+      <td>${d.up ? dirCell(d.up) : "—"}</td>
+      <td>${d.down ? dirCell(d.down) : "—"}</td>
       <td>
-        <button class="btn small" data-line="${d.line}" data-station="${d.station}">去标注</button>
-        ${d.status !== "unannotated"
-          ? `<button class="btn small danger" data-line="${d.line}" data-station="${d.station}">删除标注</button>`
-          : ""}
+        <button class="btn small" data-dir="up">上行</button>
+        <button class="btn small" data-dir="down">下行</button>
+        ${d.up && d.up.status !== "unannotated" ? '<button class="btn small danger" data-dir="up">删上行</button>' : ""}
+        ${d.down && d.down.status !== "unannotated" ? '<button class="btn small danger" data-dir="down">删下行</button>' : ""}
       </td>`;
     tr.querySelectorAll("button").forEach((b) => {
       b.addEventListener("click", () => {
-        if (b.textContent.includes("删除")) deleteAnnotation(d.line, d.station);
-        else gotoAnnotate(d.line, d.station);
+        const dir = b.dataset.dir;
+        if (b.textContent.startsWith("删")) deleteAnnotation(d.line, d.station, dir);
+        else gotoAnnotate(d.line, d.station, dir);
       });
     });
     tbody.appendChild(tr);
   });
 }
 
-async function deleteAnnotation(line, station) {
+async function deleteAnnotation(line, station, direction) {
   const ok = await promptModal(
     "删除标注",
-    `<p style="margin:0">确定删除「${line} / ${station}」的标注吗？</p>
-     <p class="sub-text" style="margin:8px 0 0">标注 JSON 与背景图将被移除，该站点变为<b>未标注</b>（站点本身保留）。此操作不可撤销。</p>`
+    `<p style="margin:0">确定删除「${line} / ${station}（${dirLabel(direction)}）」的标注吗？</p>
+     <p class="sub-text" style="margin:8px 0 0">该方向的标注 JSON 与背景图将被移除，变为<b>未标注</b>（站点与另一方向不受影响）。此操作不可撤销。</p>`
   );
   if (ok !== true) return;
   try {
     const res = await api("/api/annotation/delete", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ line, station }),
+      body: JSON.stringify({ line, station, direction }),
     });
     toast(`已删除标注：${res.deleted.join("、")}`);
     await loadStations();
@@ -1318,10 +1480,11 @@ async function deleteAnnotation(line, station) {
   }
 }
 
-function gotoAnnotate(line, station) {
+function gotoAnnotate(line, station, direction) {
   $("#annoLine").value = line;
   onAnnoLine();
   $("#annoStation").value = station;
+  $("#annoDirection").value = direction || "up";
   onAnnoStation();
   location.hash = "/annotate";
 }
