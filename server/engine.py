@@ -26,7 +26,7 @@ from src.config import CONF_THRESHOLD, GATE_MARGIN
 from src.detector import ParallelDetector
 from src.device import resolve_device, tune_threads, use_half
 from src.person_filter import select_person_idx
-from src.reporter import generate_report
+from src.reporter import STANDARD_ACTIONS, generate_report
 from src.timefmt import format_hms
 from src.train_detector import TrainDetector
 
@@ -119,6 +119,18 @@ def _fmt_timestamp(seconds):
     m = int(seconds // 60)
     s = seconds % 60
     return f"{m:02d}:{s:04.1f}"
+
+
+def _dwell_actions(serialized_actions):
+    """Annotate serialized action results with Chinese standard-action names."""
+    out = []
+    for i, a in enumerate(serialized_actions):
+        item = dict(a)
+        item["index"] = i + 1
+        item["action_cn"] = (STANDARD_ACTIONS[i]
+                             if i < len(STANDARD_ACTIONS) else a.get("action"))
+        out.append(item)
+    return out
 
 
 def _serialize_actions(analysis, fps):
@@ -587,6 +599,9 @@ class DetectionJob:
                 }
                 if not self.train_only:
                     dwell["actions_summary"] = f"检测到 {n_actions} 个标准动作"
+                    if idx < len(self._stop_blocks):
+                        dwell["actions"] = _dwell_actions(
+                            self._stop_blocks[idx]["action_results_serialized"])
                 events.append(dwell)
                 events.append({
                     "type": "departure",

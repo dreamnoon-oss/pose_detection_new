@@ -466,7 +466,9 @@ function renderTrainEvents(events) {
   events.forEach((ev, idx) => {
     const li = document.createElement("li");
     li.dataset.time = ev.timestamp != null ? ev.timestamp : ev.start;
+    const hasActions = ev.type === "dwell" && ev.actions && ev.actions.length > 0;
     li.innerHTML = `
+      ${hasActions ? '<span class="expand-arrow">▸</span>' : '<span class="expand-arrow empty"></span>'}
       <span class="event-dot ${ev.type}"></span>
       <span class="event-time">${ev.display}</span>
       <span class="event-label">${ev.label}${ev.actions_summary ? "　" + ev.actions_summary : ""}</span>
@@ -479,6 +481,39 @@ function renderTrainEvents(events) {
       v.play();
       highlightEvent(idx);
     });
+    if (hasActions) {
+      const arrow = li.querySelector(".expand-arrow");
+      const sub = document.createElement("ul");
+      sub.className = "event-actions";
+      sub.hidden = true;
+      ev.actions.forEach((a) => {
+        const item = document.createElement("li");
+        if (a.found) {
+          item.innerHTML = `<span class="act-idx">${a.index}. ${a.action_cn || a.action}</span><span class="act-time">${a.display || "—"}${a.side ? " " + a.side : ""}</span><span class="act-jump">跳转 ▶</span>`;
+          item.classList.add("found");
+          item.title = `跳转到 ${a.display}`;
+          item.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const v = $("#videoPlayer");
+            ensurePlayableSource();
+            v.currentTime = Math.max(0, a.timestamp);
+            v.play();
+            highlightEvent(idx);
+            toast(`${a.index}. ${a.action_cn || a.action}  @ ${a.display}`);
+          });
+        } else {
+          item.innerHTML = `<span class="act-idx">${a.index}. ${a.action_cn || a.action}</span><span class="act-time">未检测</span>`;
+          item.classList.add("missing");
+        }
+        sub.appendChild(item);
+      });
+      li.appendChild(sub);
+      arrow.addEventListener("click", (e) => {
+        e.stopPropagation();
+        sub.hidden = !sub.hidden;
+        arrow.textContent = sub.hidden ? "▸" : "▾";
+      });
+    }
     list.appendChild(li);
   });
 }
