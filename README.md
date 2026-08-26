@@ -449,6 +449,7 @@ python scripts/run_7_longhuazhongxiaxing.py    # 7号线 龙华中 下行
 
 ## 变更历史
 
+- **2026-08-26（GitHub 托管）**: **项目推送到 GitHub**：仓库 `github.com/dreamnoon-oss/pose_detection_new`（HTTPS，master 分支）。注意 `.gitignore` 排除了 `data/`（标注保密）、`models/*.pt`、`output/`——**新机器 clone 后需手动拷贝这三样**（标注 JSON+背景图、模型、站点 CSV `上海地铁3_4_7_15号线站点信息.csv` 在仓库内），并确认 Python ≥ 3.10 + CUDA 版 torch（3060 等 NVIDIA 卡可直跑）
 - **2026-08-26（脚本按上下行）**: **站点脚本全面按上下行分离**：
   - 标注路径解析统一走 `resolve_annotation_path`：16 个站点脚本顶部新增 `LINE`/`STATION`/`DIRECTION` 常量（`STATION` 用 CSV 全名，别名站如"临平路/龙华中路/上海体育场"走 `ALIAS_KEYS` 映射），`ANNOTATIONS_FILE` 不再硬编码旧无方向文件名——桌面脚本与前端标注工具读取同一方向文件；`server/main.py` 的 `bindfile` 接口补 `direction` 参数
   - **脚本重命名**（git mv 保留历史）：7 个现有脚本改为与标注 JSON 同构的 `run_{线路}_{站拼音}{shangxing|xiaxing}.py`，如 `run_baoshan.py` → `run_3_baoshanshangxing.py`、`run_tangqiao.py` → `run_4_tangqiaoxiaxing.py`
