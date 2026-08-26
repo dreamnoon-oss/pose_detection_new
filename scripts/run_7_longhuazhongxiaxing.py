@@ -1,4 +1,4 @@
-"""Entry point: Longhuazhong video — parallel-line + pass-region detection."""
+"""检测入口：7号线 龙华中路 下行 — parallel-line + pass-region detection."""
 
 import sys
 from pathlib import Path
@@ -6,6 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ultralytics import YOLO
+from server import stations as st
 from src.config import MODEL_DIR, DATA_DIR, OUTPUT_DIR
 from src.detector import ParallelDetector
 from src.annotation import load_annotations
@@ -15,8 +16,11 @@ from src.player import VideoPlayer
 # Paths
 # ---------------------------------------------------------------------------
 VIDEO_PATH = r"\\10.151.2.205\共享文件2\短视频\龙华中\clipped_segments\龙华中2.mp4"  # TODO: fill in video path
+LINE = "7号线"       # 线路，用于按上下行解析标注
+STATION = "龙华中路" # CSV 站名（别名站需全名）
+DIRECTION = "down"   # 上行 up / 下行 down
 MODEL_PATH = str(Path(MODEL_DIR) / "yolo26x-pose.pt")
-ANNOTATIONS_FILE = str(Path(DATA_DIR) / "regions_longhuazhong.json")
+ANNOTATIONS_FILE = str(st.resolve_annotation_path(LINE, STATION, DIRECTION))
 
 # 输出配置：视频存到 OUT_DIR/video/，报告存到 OUT_DIR/report/，文件名自动跟随输入视频名
 OUT_DIR = str(Path(OUTPUT_DIR))    # 输出根目录，可改成任意路径

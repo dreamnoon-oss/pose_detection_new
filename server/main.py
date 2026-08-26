@@ -100,7 +100,18 @@ def _detection_kwargs(params):
 # Static frontend
 # ---------------------------------------------------------------------------
 
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+class NoCacheStaticFiles(StaticFiles):
+    """Dev-mode static serving: always revalidate so frontend edits show up
+    without hard-refreshing the browser."""
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+
+app.mount("/static", NoCacheStaticFiles(directory=STATIC_DIR), name="static")
 
 
 @app.get("/", include_in_schema=False)
@@ -171,11 +182,11 @@ def annotation_status(line: str | None = None):
 
 
 @app.get("/api/stations/bindfile")
-def stations_bindfile(line: str, station_key: str):
-    path = st.resolve_annotation_path(line, station_key)
+def stations_bindfile(line: str, station_key: str, direction: str = "up"):
+    path = st.resolve_annotation_path(line, station_key, direction)
     if not os.path.exists(path):
         raise HTTPException(404, "该站点无标注文件")
-    return {"path": path, "content": _annotation_json(line, station_key)}
+    return {"path": path, "content": _annotation_json(line, station_key, direction)}
 # ---------------------------------------------------------------------------
 # Parameters
 # ---------------------------------------------------------------------------
@@ -413,7 +424,8 @@ def annotation_save(body: AnnotationSaveBody):
     direction = body.direction if body.direction in st.DIRECTIONS else "up"
     key = st.station_key(body.line, body.station)
     full_key = st.direction_key(key, direction)
-    path = st.resolve_annotation_path(body.line, body.station, direction)
+    path = st.resolve_annotation_path(body.line, body.station, direction,
+                                      for_save=True)
     data_dir = os.path.dirname(path)
     os.makedirs(data_dir, exist_ok=True)
 
@@ -453,8 +465,39 @@ def annotation_save(body: AnnotationSaveBody):
             "inside_side": int(body.gate_line.get("inside_side", 1)),
         }
 
+    # Resolve the legacy path BEFORE writing, otherwise the fresh new-format
+    # file would shadow it and migration would never trigger.
+    old_path = st.resolve_annotation_path(body.line, body.station, direction)
+
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
+
+    # Migrate legacy files: once the new-format file is written, remove the
+    # old undirected / no-line-number file and rename its background so no
+    # zombie files are left behind.
+    try:
+        if old_path != path and os.path.exists(old_path):
+            with open(old_path, encoding="utf-8") as f:
+                old_data = json.load(f)
+            old_bg = (old_data.get("background") or {}).get("image")
+            new_bg = (data.get("background") or {}).get("image")
+            if old_bg and new_bg == old_bg:
+                old_bg_path = os.path.join(data_dir, old_bg)
+                new_bg_name = f"regions_{st.line_number(body.line)}_{full_key}_background.png"
+                new_bg_path = os.path.join(data_dir, new_bg_name)
+                if os.path.exists(old_bg_path):
+                    if old_bg != new_bg_name and not os.path.exists(new_bg_path):
+                        os.rename(old_bg_path, new_bg_path)
+                        data["background"]["image"] = new_bg_name
+                        with open(path, "w", encoding="utf-8") as f:
+                            json.dump(data, f, indent=2, ensure_ascii=False)
+                    else:
+                        os.remove(old_bg_path)
+            elif old_bg and new_bg != old_bg and os.path.exists(os.path.join(data_dir, old_bg)):
+                os.remove(os.path.join(data_dir, old_bg))
+            os.remove(old_path)
+    except OSError as exc:
+        print(f"[annotation_save] legacy migration skipped: {exc}")
 
     return {"ok": True, "path": path, "key": key, "full_key": full_key,
             "direction": direction, "background_name": bg_name}

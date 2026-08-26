@@ -1,4 +1,4 @@
-"""Entry point: Jingansi video — parallel-line + pass-region detection."""
+"""检测入口：3号线 宝山 上行 — parallel-line + pass-region detection."""
 
 import sys
 from pathlib import Path
@@ -6,6 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ultralytics import YOLO
+from server import stations as st
 from src.config import MODEL_DIR, DATA_DIR, OUTPUT_DIR
 from src.detector import ParallelDetector
 from src.annotation import load_annotations
@@ -14,9 +15,12 @@ from src.player import VideoPlayer
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-VIDEO_PATH = r"\\10.151.2.205\共享文件2\短视频\静安寺\clipped_segments\静安寺2.mp4"  # TODO: fill in video path
+VIDEO_PATH = r"\\10.151.2.205\共享文件2\司机行为规范样本采样\短视频\宝山3.mp4"
+LINE = "3号线"     # 线路，用于按上下行解析标注
+STATION = "宝山"   # CSV 站名（别名站需全名）
+DIRECTION = "up"   # 上行 up / 下行 down
 MODEL_PATH = str(Path(MODEL_DIR) / "yolo26x-pose.pt")
-ANNOTATIONS_FILE = str(Path(DATA_DIR) / "regions_jingansi.json")
+ANNOTATIONS_FILE = str(st.resolve_annotation_path(LINE, STATION, DIRECTION))
 
 # 输出配置：视频存到 OUT_DIR/video/，报告存到 OUT_DIR/report/，文件名自动跟随输入视频名
 OUT_DIR = str(Path(OUTPUT_DIR))    # 输出根目录，可改成任意路径
@@ -35,20 +39,19 @@ DETECTION_RULES = [
 # Action mapping: which rule occurrence maps to which action
 # ---------------------------------------------------------------------------
 ACTION_MAPPING = [
-    {"action": "Act1 Call", "rule": "rule_A", "occurrence": 1},
-    {"action": "Act2 CloseDoor", "rule": "rule_B", "occurrence": 1},
-    {"action": "Act3 CheckGap", "rule": "rule_A", "occurrence": 2},
-    {"action": "Act4 CheckLight", "rule": "rule_C", "occurrence": 1},
+    {"action": "Act1", "rule": "rule_A", "occurrence": 1},
+    {"action": "Act2", "rule": "rule_B", "occurrence": 1},
+    {"action": "Act3", "rule": "rule_A", "occurrence": 2},
+    {"action": "Act4", "rule": "rule_C", "occurrence": 1},
     {"action": "Act5 CheckSwitch", "rule": "rule_D", "occurrence": 1},
 ]
 
 DETECTION_KWARGS = {
     "angle_threshold": 40,
     "min_arm_len": 30,
-    "min_arm_torso_angle": 45,
+    "min_arm_torso_angle": 45,  # 手臂 vs 躯干夹角需 >45°，防止未抬臂的误触发
     "dynamic_angle_coeff": 0.6,
 }
-
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -66,7 +69,7 @@ if __name__ == "__main__":
         model, VIDEO_PATH, detector, ACTION_MAPPING,
         annotations_file=ANNOTATIONS_FILE,
         output_dir=OUT_DIR,
-        station_name="静安寺", model_path=MODEL_PATH,
+        station_name="宝山", model_path=MODEL_PATH,
         imgsz=640, frame_skip=0,
         conf_low_threshold=0.3, conf_mid_threshold=0.6,
         train_mad_threshold=20,
@@ -75,3 +78,6 @@ if __name__ == "__main__":
         auto_exit=True,
     )
     player.run()
+
+
+

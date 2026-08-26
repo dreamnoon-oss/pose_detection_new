@@ -1079,6 +1079,28 @@ function renderAnnoList() {
   track.className = "group";
   track.textContent = `track_roi: ${anno.trackRoi || "—"}`;
   list.appendChild(track);
+  const gate = document.createElement("div");
+  gate.className = "group";
+  gate.textContent = "gate";
+  list.appendChild(gate);
+  const gateItem = document.createElement("div");
+  gateItem.className = "item" + (anno.gate ? "" : " muted");
+  gateItem.textContent = anno.gate
+    ? `GATE（已设置，IN 在${anno.gate.inside_side === 1 ? "正侧" : "反侧"}，点击翻转）`
+    : "GATE（未设置，用门线工具在画布上画）";
+  gateItem.onclick = () => {
+    if (anno.gate) {
+      snapshot();
+      anno.gate.inside_side = -anno.gate.inside_side;
+      renderAnno();
+      renderAnnoList();
+      updateAnnoStatusBar();
+      toast(`门线内侧已翻转（IN 标记在${anno.gate.inside_side === 1 ? "正侧" : "反侧"}）`);
+    } else {
+      toast("请先选择门线工具，在画布上画门线");
+    }
+  };
+  list.appendChild(gateItem);
   const bg = document.createElement("div");
   bg.className = "group";
   bg.textContent = `background: ${anno.backgroundName ? "✓ " + anno.backgroundName : "✗"}`;
@@ -1097,6 +1119,7 @@ function reset() {
   anno.regions = [];
   anno.lines = [];
   anno.trackRoi = null;
+  anno.gate = null;
   anno.selected = null;
   anno.drawing = null;
   anno.history = [];
@@ -1113,6 +1136,10 @@ function loadData(data) {
     const tr = anno.regions.find((r) => r.name === "track");
     if (tr) anno.trackRoi = "track";
   }
+  anno.gate = (data.gate_line && data.gate_line.pts)
+    ? { pts: data.gate_line.pts.map((p) => p.slice()),
+        inside_side: data.gate_line.inside_side || 1 }
+    : null;
   anno.videoMeta = {
     width: data.width || 1920,
     height: data.height || 1080,
@@ -1202,6 +1229,10 @@ async function saveAnnotation() {
     regions: anno.regions,
     lines: anno.lines,
     track_roi: anno.trackRoi,
+    gate_line: anno.gate ? {
+      pts: anno.gate.pts.map((p) => [Math.round(p[0]), Math.round(p[1])]),
+      inside_side: anno.gate.inside_side || 1,
+    } : null,
     video: anno.videoMeta.video,
     frame: anno.videoMeta.frame,
     width: anno.videoMeta.width,
@@ -1243,6 +1274,10 @@ function exportJson() {
     regions: anno.regions.map((r) => ({ name: r.name, xywh: r.xywh.map(Math.round) })),
     lines: anno.lines.map((l) => ({ name: l.name, pts: l.pts.map((p) => p.map(Math.round)) })),
     track_roi: anno.trackRoi,
+    gate_line: anno.gate ? {
+      pts: anno.gate.pts.map((p) => [Math.round(p[0]), Math.round(p[1])]),
+      inside_side: anno.gate.inside_side || 1,
+    } : null,
     background: anno.backgroundName ? { image: anno.backgroundName, frame: anno.videoMeta.frame } : null,
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });

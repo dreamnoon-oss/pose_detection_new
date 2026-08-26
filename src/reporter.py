@@ -35,7 +35,7 @@ def generate_report(output_path, *,
     Args:
         output_path: Path to save the .csv file.
         station_name: Human-readable station name (e.g. 上体场).
-        script_name: Script filename (e.g. run_shangtichang.py).
+        script_name: Script filename (e.g. run_4_shangtichangxiaxing.py).
         video_path: Input video path.
         output_video_path: Annotated output video path.
         model_path: YOLO model file path.

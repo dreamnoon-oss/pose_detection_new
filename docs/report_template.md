@@ -9,7 +9,7 @@
 
 基本信息
 站点名称,上体场
-执行脚本,run_shangtichang.py
+执行脚本,run_4_shangtichangxiaxing.py
 检测日期,2026-07-16 14:30:00
 视频文件,data/shangtichang.mp4
 输出视频,output/video/pose_output_shangtichang.mp4

@@ -378,7 +378,7 @@ def annotation_file_exists(line, name):
     return False
 
 
-def resolve_annotation_path(line, name, direction=None):
+def resolve_annotation_path(line, name, direction=None, for_save=False):
     """Return the path to a station(+direction) annotation JSON.
 
     Resolution order:
@@ -386,6 +386,10 @@ def resolve_annotation_path(line, name, direction=None):
     2. ``regions_{站拼音}{上下行}.json`` (user convention, no line number)
     3. legacy undirected ``regions_{站拼音}.json`` (transitional fallback)
     If nothing exists, returns the new-format path (for saving).
+
+    ``for_save`` skips the legacy fallback so saving always targets a
+    direction-qualified file: up/down annotations never overwrite each
+    other, and loading an old undirected file then saving migrates it.
     """
     base_key = station_key(line, name)
     ln = line_number(line)
@@ -396,7 +400,7 @@ def resolve_annotation_path(line, name, direction=None):
     no_line = os.path.join(DATA_DIR, f"regions_{full_key}.json")
     if os.path.exists(no_line):
         return no_line
-    if direction:
+    if direction and not for_save:
         legacy = os.path.join(DATA_DIR, f"regions_{base_key}.json")
         if os.path.exists(legacy):
             return legacy

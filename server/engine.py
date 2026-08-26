@@ -407,7 +407,11 @@ class DetectionJob:
         td.frame_num = cur_frame
         td.mad = mad
 
-        if mad > td.high_threshold:
+        # AWAY: high MAD suggests arrival; PRESENT: low MAD suggests departure.
+        # (Full-detect mode only reaches here while AWAY, so its semantics are unchanged.)
+        suspect = (mad > td.high_threshold if td.state == "AWAY"
+                   else mad < td.low_threshold)
+        if suspect:
             back = max(0, cur_frame - 1 - jump)
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, back)
             td.hold_counter = 0
@@ -429,9 +433,15 @@ class DetectionJob:
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, target)
 
     def _process_train_only_frame(self, frame, cur_frame, idle_jump):
-        """Train-only mode: MAD detection per frame, no YOLO/pose/action rules."""
+        """Train-only mode: MAD detection per frame, no YOLO/pose/action rules.
+
+        Jump-scan applies in both states — while the train is present the MAD
+        only matters once it drops (possible departure), so sampling every
+        ``idle_jump_seconds`` is enough; a suspected departure rewinds and
+        confirms frame-by-frame so the departure timestamp stays exact.
+        """
         td = self.train_detector
-        if idle_jump > 0 and self._jump_scan_active and td.state == "AWAY":
+        if idle_jump > 0 and self._jump_scan_active:
             self._process_jump_scan(frame, cur_frame, idle_jump)
             return
 
@@ -447,6 +457,16 @@ class DetectionJob:
             else:
                 self._confirm_low_count += 1
                 if self._confirm_low_count >= int(self.fps * 2):
+                    self._jump_scan_active = True
+                    self._confirm_low_count = 0
+        elif idle_jump > 0 and train_state == "PRESENT":
+            # Departure confirm: MAD back above low threshold -> still present,
+            # resume jump-scanning (no need to keep watching frame by frame).
+            if train_mad < td.low_threshold:
+                self._confirm_low_count = 0
+            else:
+                self._confirm_low_count += 1
+                if self._confirm_low_count >= int(self.fps * 1):
                     self._jump_scan_active = True
                     self._confirm_low_count = 0
 

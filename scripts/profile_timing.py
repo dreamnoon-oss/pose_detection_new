@@ -8,15 +8,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import cv2
 from ultralytics import YOLO
+from server import stations as st
 from src.config import MODEL_DIR, DATA_DIR, OUTPUT_DIR
 from src.detector import ParallelDetector
 from src.annotation import load_annotations
 from src import visualization as viz
 
-# —— 配置（与 run_shangtichang.py 一致） ——
+# —— 配置（与 run_4_shangtichangxiaxing.py 一致） ——
 VIDEO_PATH = r"D:\科研\申通技术中心\端头门司机行为分析\上体场2.mp4"
+LINE = "4号线"         # 线路，用于按上下行解析标注
+STATION = "上海体育场" # CSV 站名（别名站需全名）
+DIRECTION = "down"     # 上行 up / 下行 down
 MODEL_PATH = str(Path(MODEL_DIR) / "yolo26x-pose.pt")
-ANNOTATIONS_FILE = str(Path(DATA_DIR) / "regions_shangtichang.json")
+ANNOTATIONS_FILE = str(st.resolve_annotation_path(LINE, STATION, DIRECTION))
 
 DETECTION_RULES = [
     {"name": "rule_A", "type": "parallel_line", "ref_line": "line_1"},

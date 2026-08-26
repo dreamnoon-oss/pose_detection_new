@@ -5,21 +5,33 @@
 ## 架构
 
 ```
-run_xxx.py → VideoPlayer → ParallelDetector → detection.py → geometry.py
+脚本模式: run_xxx.py → VideoPlayer → ParallelDetector → detection.py → geometry.py
                 ↕                ↕
           annotation.py    SequenceAnalyzer (事后分析)
           visualization.py
+
+Web 模式: run_web.py → FastAPI (server/main.py + engine.py) → DetectionJob（无头引擎，复用同一套 src/ 模块）
+                ↕
+        static/ 前端页面（检测分析 / 标注工具 / 站点管理）
 ```
 
 **核心思路**：所有动作规则**并行独立检测**，各自记录触发时间戳。视频播放结束后，按事件发生顺序映射到预期动作序列，判定合规性。
+
+**Web 与脚本共用同一套检测引擎**（`src/detector.py` / `src/train_detector.py` / `src/analyzer.py` / `src/reporter.py` / `src/visualization.py`），`server/engine.py` 的 `DetectionJob` 是无头版本（无 OpenCV GUI），在后台线程运行并通过 `JobState` 轮询进度。
 
 ## 项目结构
 
 ```
 pose_detection/
-├── README.md
+├── README.md            # 项目文档 + 进度时间线（本文档）
 ├── pyproject.toml
 ├── requirements.txt
+├── run_web.py           # Web 前端启动入口（FastAPI + 静态页面）
+├── server/              # Web 后端
+│   ├── main.py          #   FastAPI 路由（视频/检测/参数/标注/下载）
+│   ├── engine.py        #   无头检测引擎 DetectionJob + TaskManager
+│   ├── stations.py      #   站点注册表（线路/站点/方向、规则模板、默认参数）
+│   └── static/          #   前端页面（index.html + app.js + style.css）
 ├── src/
 │   ├── config.py          # 全局配置（关键点、骨架、阈值）
 │   ├── geometry.py        # 几何计算（角度、线段相交）
@@ -32,21 +44,31 @@ pose_detection/
 │   ├── timefmt.py         # 时间格式化（秒 → HH:MM:SS）
 │   ├── train_detector.py  # 列车进出站检测（背景帧差法）
 │   ├── person_filter.py   # 门线选人纯函数（bbox 底边+髋部锚点）
+│   ├── device.py          # 设备选择（auto → cuda/mps/cpu）与线程调优
+│   ├── confidence_color.py# 关键点置信度三档着色
 │   └── player.py          # 交互式视频播放器（含门线）
 ├── scripts/
-│   ├── run_shangtichang.py
-│   ├── run_baoshan.py
-│   ├── run_jingansi.py
-│   ├── run_tangqiao.py
-│   ├── run_pudongdadao.py
-│   ├── run_linping.py
-│   ├── run_longhuazhong.py
+│   ├── run_3_baoshanshangxing.py       # 3号线 宝山 上行
+│   ├── run_3_baoshanlushangxing.py     # 3号线 宝山路 上行
+│   ├── run_3_longcaoshangxing.py       # 3号线 龙漕路 上行
+│   ├── run_3_shanghainanshangxing.py   # 3号线 上海南站 上行
+│   ├── run_4_linpingshangxing.py       # 4号线 临平路 上行
+│   ├── run_4_pudongdadaoshangxing.py   # 4号线 浦东大道 上行
+│   ├── run_4_shangtichangxiaxing.py    # 4号线 上海体育场 下行
+│   ├── run_4_tangqiaoxiaxing.py        # 4号线 塘桥 下行
+│   ├── run_4_zhongshanparkshangxing.py # 4号线 中山公园 上行
+│   ├── run_4_zhongshanparkxiaxing.py   # 4号线 中山公园 下行
+│   ├── run_7_changqingshangxing.py     # 7号线 长清路 上行
+│   ├── run_7_jingansishangxing.py      # 7号线 静安寺 上行
+│   ├── run_7_jingansixiaxing.py        # 7号线 静安寺 下行
+│   ├── run_7_longhuazhongxiaxing.py    # 7号线 龙华中路 下行
+│   ├── run_7_longyangshangxing.py      # 7号线 龙阳路 上行
+│   ├── run_7_longyangxiaxing.py        # 7号线 龙阳路 下行
+│   ├── profile_timing.py   # 无头性能分析
 │   └── video_anonymize.py   # 视频脱敏工具
 ├── data/                   # 标注数据 (JSON + 背景图)
 ├── models/                 # 模型文件
-├── output/
-│   ├── video/              # 检测视频
-│   └── report/             # CSV 检测报告
+├── output/                 # 输出（video/report/uploads）
 └── docs/                   # 详细文档
 ```
 
@@ -75,15 +97,23 @@ pose_detection/
 
 ## 已配置站点
 
-| 站点 | 脚本 | 检测类型 | 动作数 | 动作 |
-|------|------|------|--------|------|
-| 上体场 | `run_shangtichang.py` | PAR + CROSS | 4 | Call / CloseDoor / CheckGap / CheckLight |
-| 宝山 | `run_baoshan.py` | P+L + POINT | 5 | PointFwd / CheckR2 / PointFwd / CheckR3 / CheckR4 |
-| 静安寺 | `run_jingansi.py` | PAR + CROSS | 5 | Call / CloseDoor / CheckGap / CheckLight / CheckSwitch |
-| 塘桥 | `run_tangqiao.py` | PAR + CROSS | 4 | Call / CloseDoor / CheckGap / CheckLight |
-| 浦东大道 | `run_pudongdadao.py` | PAR + CROSS | 5 | Call / CloseDoor / CheckGap / CheckLight / CheckSwitch |
-| 临平 | `run_linping.py` | PAR + CROSS | 4 | Call / CloseDoor / CheckGap / CheckLight |
-| 龙华中 | `run_longhuazhong.py` | PAR + CROSS | 5 | Call / CloseDoor / CheckGap / CheckLight / CheckSwitch |
+脚本命名与标注 JSON 一致：`run_{线路}_{站拼音}{shangxing|xiaxing}.py`（上下行分开）。
+
+| 站点 | 脚本 | 方向 | 检测类型 | 动作数 | 动作 |
+|------|------|------|------|--------|------|
+| 宝山 | `run_3_baoshanshangxing.py` | 上行 | P+L + POINT | 5 | PointFwd / CheckR2 / PointFwd / CheckR3 / CheckR4 |
+| 宝山路 | `run_3_baoshanlushangxing.py` | 上行 | PAR + CROSS | 4 | Call / CloseDoor / CheckGap / CheckLight |
+| 龙漕路 | `run_3_longcaoshangxing.py` | 上行 | PAR + CROSS | 4 | Call / CloseDoor / CheckGap / CheckLight |
+| 上海南站 | `run_3_shanghainanshangxing.py` | 上行 | PAR + CROSS | 4 | Call / CloseDoor / CheckGap / CheckLight |
+| 上体场 | `run_4_shangtichangxiaxing.py` | 下行 | PAR + CROSS | 4 | Call / CloseDoor / CheckGap / CheckLight |
+| 塘桥 | `run_4_tangqiaoxiaxing.py` | 下行 | PAR + CROSS | 4 | Call / CloseDoor / CheckGap / CheckLight |
+| 浦东大道 | `run_4_pudongdadaoshangxing.py` | 上行 | PAR + CROSS | 5 | Call / CloseDoor / CheckGap / CheckLight / CheckSwitch |
+| 临平 | `run_4_linpingshangxing.py` | 上行 | PAR + CROSS | 4 | Call / CloseDoor / CheckGap / CheckLight |
+| 中山公园 | `run_4_zhongshanpark{shangxing,xiaxing}.py` | 上/下行 | PAR + CROSS | 4 | Call / CloseDoor / CheckGap / CheckLight |
+| 静安寺 | `run_7_jingansi{shangxing,xiaxing}.py` | 上/下行 | PAR + CROSS | 5/4 | 上行含 CheckSwitch |
+| 长清路 | `run_7_changqingshangxing.py` | 上行 | PAR + CROSS | 4 | Call / CloseDoor / CheckGap / CheckLight |
+| 龙阳路 | `run_7_longyang{shangxing,xiaxing}.py` | 上/下行 | PAR + CROSS | 4 | Call / CloseDoor / CheckGap / CheckLight |
+| 龙华中 | `run_7_longhuazhongxiaxing.py` | 下行 | PAR + CROSS | 5 | Call / CloseDoor / CheckGap / CheckLight / CheckSwitch |
 
 所有站点均已配置列车进出站检测（背景帧差法，track ROI + 背景图 + MAD 阈值 20）。
 
@@ -145,6 +175,19 @@ pose_detection/
 - **手臂线段**：肩→肘→腕以加粗青色（左臂）/ 洋红色（右臂）绘制，置信度阈值降至 0.3
 - **延长射线**：绿色 = 命中区域，红色 = 未命中
 - 暂停和拖拽进度条时完整渲染所有面板
+
+### 可视化模块（`src/visualization.py`，纯 OpenCV 英文渲染，无 PIL 依赖）
+
+| 函数 | 作用 |
+|------|------|
+| `draw_status_overlay` | 检测面板（左上角）：规则、hold 进度、触发次数、动作状态 |
+| `draw_action_metrics` | 每个动作的实时夹角（deg/S-W/S-E/W） |
+| `draw_arm_rays` | 青/洋红手臂线段，绿/红延长射线 |
+| `draw_annotations` | 区域 + 参考线叠加（含门线） |
+| `draw_train_status` | 列车到/离站状态徽章（右上角，MAD + hold） |
+| `draw_analysis_result` | 最终分析结果叠加（左下角） |
+| `draw_frame_info` | 帧计数器（右上角） |
+| `draw_confidence_legend` | 置信度三档颜色图例（右下角） |
 
 ## 置信度指标
 
@@ -288,6 +331,57 @@ python scripts/video_anonymize.py -i video.mp4 -o output.mp4 --device cuda:0
 | `--no-face` | — | 跳过人脸检测，只做手动框选 |
 | `--no-fix-roi` | — | 跳过手动框选，只做人脸检测 |
 
+## Web 前端
+
+基于 FastAPI + 原生 HTML/JS 的本地单机 Web 界面，**与脚本共用同一套检测引擎**。
+
+### 功能（三个页面）
+
+| 页面 | 功能 |
+|------|------|
+| **检测分析** | 线路/站点/方向选择（标注状态展示）、视频加载（文件上传或服务器本地路径）、运行模式（仅播放 / 开启检测 / **仅检测列车进出站**）、参数配置（模型置信度、imgsz、角度阈值、跳跃扫描间隔等）、检测进度与状态、源视频/结果视频播放、列车到站事件列表、结果下载（检测视频 + CSV 报告） |
+| **标注工具** | 浏览器内框选区域 / 画参考线 / 轨道 ROI / 门线（含 IN 侧翻转），保存背景图，生成站点标注 JSON；保存自动按上下行写入新格式文件，导入旧的无方向标注后保存即自动迁移 |
+| **站点管理** | 线路站点列表、每站每方向的标注状态（已标注/不完整/未标注） |
+
+### 检测任务模型
+
+- 同时只允许**一个**检测任务（`TaskManager`），后台线程运行，前端轮询 `/api/detect/status`
+- 任务结束后生成输出视频（`output/video/pose_output_<视频名>.mp4`）与 CSV 报告（`output/report/report_<视频名>.csv`）
+- 结果 JSON 含 `engine.device` / `engine.half`，可核对实际运行设备
+
+### 启动方式
+
+```bash
+# 必须用 pose 环境（GPU）启动，否则 torch.cuda.is_available()=False 落到 CPU，速度慢 ~20 倍
+C:\anaconda\anaconda3\envs\pose\python.exe run_web.py
+# 访问 http://127.0.0.1:8000
+```
+
+桌面上有 `启动.bat` 一键启动（自动打开浏览器）。**注意**：项目根 `.venv` 里的 torch 是 CPU 版（pip 默认源），不要用它跑 Web。
+
+### 设备选择
+
+`src/device.py::resolve_device("auto")`：CUDA > MPS > CPU；`half=True`（默认）在 GPU 上启用 FP16。验证：`/api/model/status` 或检测结果 `engine.device` 应为 `cuda:0`。
+
+### 仅检测列车进出站（train_only）模式
+
+- 不加载 YOLO 模型，只做背景帧差法（MAD）检测列车到站/离站，报告只含到站/离站/停靠时长
+- **跳跃扫描在空闲和在场状态都生效**（2026-08-26 优化）：每 5 秒采样 1 帧，疑似进站（MAD>20）/疑似离站（MAD<15）时回退 5 秒逐帧确认，时间戳精确到帧；误报自动恢复跳跃
+- 优化前在场段逐帧（≈0.9x 实时），优化后全程 ≈11.7x 实时（1 小时视频从 1 小时+ 降到 5~10 分钟）
+
+### API 一览
+
+| 路由 | 说明 |
+|------|------|
+| `/api/stations/*` | 线路/站点列表、标注状态、绑定文件 |
+| `/api/video/*` | 视频加载（上传/路径）、信息、播放流 |
+| `/api/detect/start|stop|status|result` | 检测任务控制 |
+| `/api/params/get|set` | 检测参数读写 |
+| `/api/train/events` | 列车到站事件 |
+| `/api/download/*` | 结果视频 / CSV 报告下载 |
+| `/api/annotation/*` | 标注加载/保存/背景图/抽帧/删除 |
+| `/api/model/status` | 模型存在性与运行设备 |
+
 ## 快速开始
 
 ### 环境要求
@@ -308,13 +402,14 @@ pip install -r requirements.txt
 ### 运行
 
 ```bash
-python scripts/run_shangtichang.py   # 上体场
-python scripts/run_baoshan.py        # 宝山（角度法）
-python scripts/run_jingansi.py       # 静安寺
-python scripts/run_tangqiao.py       # 塘桥
-python scripts/run_pudongdadao.py    # 浦东大道
-python scripts/run_linping.py        # 临平
-python scripts/run_longhuazhong.py   # 龙华中
+# 每个站点脚本按上下行分开，脚本名与标注 JSON 对应；跑前在脚本顶部填 VIDEO_PATH
+python scripts/run_3_baoshanshangxing.py       # 3号线 宝山 上行
+python scripts/run_4_shangtichangxiaxing.py    # 4号线 上体场 下行
+python scripts/run_7_jingansishangxing.py      # 7号线 静安寺 上行
+python scripts/run_4_tangqiaoxiaxing.py        # 4号线 塘桥 下行
+python scripts/run_4_pudongdadaoshangxing.py   # 4号线 浦东大道 上行
+python scripts/run_4_linpingshangxing.py       # 4号线 临平 上行
+python scripts/run_7_longhuazhongxiaxing.py    # 7号线 龙华中 下行
 ```
 
 ## 开发约定 / 运行环境
@@ -327,8 +422,9 @@ python scripts/run_longhuazhong.py   # 龙华中
 
 ### 运行环境（实际开发机）
 
-- 运行环境：`D:\anaconda\envs\yolo\python.exe`（已装 ultralytics 8.4.75 与 numpy）
-- PATH 上的裸 `python` 是 Windows Store 存根（退出码 49），不可用；`D:\pycharm_pytorch\.venv` 未装 ultralytics
+- **统一使用 conda pose 环境**：`C:\anaconda\anaconda3\envs\pose\python.exe`（Python 3.11，torch 2.13.0+cu126，ultralytics 8.4.110，GPU = RTX 2070）。**脚本和 Web 前端都用它跑**
+- ⚠️ 项目根 `.venv`（Python 3.10）里的 torch 是 **CPU 版**（pip 默认源装的，`torch.version.cuda` 为 None），跑 Web 会落到 CPU，推理 ~508ms/帧（GPU ~24ms/帧，慢 20 倍）。**不要用它**；如需使用需重装 CUDA 版：`pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126`
+- 老环境 `D:\anaconda\envs\yolo`（README 早期记录）已不用
 - Windows 控制台 GBK 下中文 print 显示为乱码属显示问题，不影响测试结果
 - 用户主目录名含引号，命令行访问 `~` 需用 `os.path.expanduser`
 
@@ -353,6 +449,27 @@ python scripts/run_longhuazhong.py   # 龙华中
 
 ## 变更历史
 
+- **2026-08-26（脚本按上下行）**: **站点脚本全面按上下行分离**：
+  - 标注路径解析统一走 `resolve_annotation_path`：16 个站点脚本顶部新增 `LINE`/`STATION`/`DIRECTION` 常量（`STATION` 用 CSV 全名，别名站如"临平路/龙华中路/上海体育场"走 `ALIAS_KEYS` 映射），`ANNOTATIONS_FILE` 不再硬编码旧无方向文件名——桌面脚本与前端标注工具读取同一方向文件；`server/main.py` 的 `bindfile` 接口补 `direction` 参数
+  - **脚本重命名**（git mv 保留历史）：7 个现有脚本改为与标注 JSON 同构的 `run_{线路}_{站拼音}{shangxing|xiaxing}.py`，如 `run_baoshan.py` → `run_3_baoshanshangxing.py`、`run_tangqiao.py` → `run_4_tangqiaoxiaxing.py`
+  - **补齐缺失站点**：新增 9 个脚本——3号线 宝山路/龙漕路/上海南站上行、4号线 中山公园上/下行、7号线 长清路上行、静安寺下行、龙阳路上/下行；新站用标准 4 动作模板（Act1 Call / Act2 CloseDoor / Act3 CheckGap / Act4 CheckLight），`VIDEO_PATH` 留空待填。至此 `data/` 16 个标注 JSON 与 `scripts/` 16 个站点脚本一一对应
+  - 引用同步更新：README 目录树/站点表/运行命令、`docs/report_template.md`、`src/reporter.py` 注释；`profile_timing.py`（无头性能分析）保留原名，注释同步
+- **2026-08-26（数据一致性）**: **标注 JSON ↔ 背景图一一对应校验**：全量扫描 `data/` 发现 5 处不匹配，已修复——4 个 JSON 的 `background.image` 指向磁盘实际存在的图（浦东大道上行、中山公园下行、长清上行、龙阳上行），上体场下行背景图重命名 `regions_4_shangtichang_background.png` → `regions_4_shangtichangxiaxing_background.png`；修复后 16 对 JSON/背景图全部匹配，0 失效引用、0 孤儿图片
+- **2026-08-26（标注工具）**: **门线标注闭环 + 标注保存自动迁移**：
+  - 门线修复（`server/static/app.js`）：保存 payload 补上 `gate_line` 字段、加载时恢复门线显示（含 IN 侧）、导出/导入 JSON 携带门线——之前门线画了保存不上、重开页面不显示
+  - 标注列表新增 `gate` 分组（`renderAnnoList`）：始终显示门线状态（未设置灰色提示 / 已设置显示 IN 侧），**点击条目可直接翻转 IN 侧方向**（支持撤销）
+  - 标注保存上下行分离 + **自动迁移**（`server/stations.py::resolve_annotation_path` 新增 `for_save` 参数 + `server/main.py`）：保存时强制写入带上下行的新格式文件 `regions_{线}_{站}{上行|下行}.json`，不再回退到无方向的旧文件，**上行/下行标注不再互相覆盖**；保存成功后**自动删除旧格式 JSON、背景图同步改名并更新引用**——加载旧标注 → 修改 → 保存即完成迁移，无僵尸文件（修复旧路径需在写新文件前解析的 bug，否则迁移不触发）；加载仍兼容旧文件
+  - 静态文件禁用缓存（`server/main.py` `NoCacheStaticFiles`）：`Cache-Control: no-store`，前端改动普通刷新即生效（修复 `get_response` 未 `await` 导致的 /static 500）
+  - 数据整理：宝山站、静安寺下行等旧命名标注已迁移为新格式，僵尸文件已清理
+- **2026-08-26**: **Web 检测性能修复与 train_only 提速**：
+  - **根因定位**：Web 慢是因为项目根 `.venv` 的 torch 是 CPU 版（`torch.cuda.is_available()=False` → CPU 推理 ~508ms/帧 vs GPU ~24ms/帧）。修复：统一用 conda pose 环境（GPU）启动 Web，桌面 `启动.bat` 一键启动
+  - **MAD 计算提速**（`src/train_detector.py`）：`astype(float)` 差分 → `cv2.absdiff + cv2.mean`（uint8 运算，结果数学等价），每帧 34ms → ~2ms，前后端所有模式受益
+  - **train_only 在场跳跃扫描**（`server/engine.py`）：列车在场时不再逐帧，改为每 5 秒采样 1 帧；疑似离站（MAD<15）回退逐帧确认（时间戳精确），确认中 MAD 回升 1 秒恢复跳跃。实测 75 秒停站片段 6.4 秒跑完（**0.9x → 11.7x 实时**，约 13 倍提速），1 小时视频预计 5~10 分钟
+  - 全检测模式逻辑不变（在场仍需逐帧 YOLO）；`PROJECT_STATUS.md` 归档删除，内容已并入本文档
+- **2026-08-13 ~ 08-20**: **Web 前端上线**（`run_web.py` + `server/` + `static/`）：
+  - FastAPI 后端：视频加载（上传/本地路径）、检测任务控制（开始/停止/状态/结果）、参数配置、列车事件、结果下载（视频+CSV）、标注管理（保存/背景图/抽帧/删除）、模型状态
+  - 前端三个页面：检测分析 / 标注工具 / 站点管理；`server/engine.py` 无头引擎复用 `src/` 全部检测模块，支持仅播放 / 开启检测 / 仅检测列车进出站三种运行模式
+  - 站点注册表 `server/stations.py`：4 条线路站点拼音映射、7 个已配置站点的规则模板（含道岔 Act5）、上下行方向标注文件解析（新命名 `regions_{线}_{站}{方向}.json` 与旧命名兼容）
 - **2026-08-19**: **门线全站启用**：门线能力并入 `VideoPlayer`（`load_gate_info` + 门线选人 + G/X 键），任何站点 JSON 配 `gate_line` 键即启用（脚本零改动）；删除测试文件 `run_tangqiao_test.py` / `test_gate_tangqiao.py` / `src/gate_player.py`；塘桥 JSON 已含门线，其余站点可在各站脚本暂停后按 G 画线保存。详见上文"门线"章节。
 - **2026-08-17**: **门线（司机侧人员过滤）— 塘桥先行测试**：`GatePlayer` 子类 + `run_tangqiao_test.py`（G 画/翻转、X 删除、S 保存）；`person_filter.py` 纯函数（bbox 底边 + 髋部锚点、`inside_side` 旗标、12px 死区滞回、kp/boxes 同索引）；`VideoPlayer` 保持无门线，验证后正式站 JSON 配 `gate_line` 键启用。详见上文"门线"章节。
 - **2026-07-31**: **报告时间改时分秒** (`src/timefmt.py`) — CSV 中列车到/离站、停靠时长、动作检测时间统一为 `HH:MM:SS`（整数秒）；仅报告生效，控制台/视频仍为秒。
